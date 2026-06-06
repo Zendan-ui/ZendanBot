@@ -3,11 +3,11 @@ from pydantic import Field
 import os
 
 class Settings(BaseSettings):
-    BOT_TOKEN: str = Field(..., env="BOT_TOKEN")
-    ADMIN_ID: int = Field(..., env="ADMIN_ID")
-    BOT_USERNAME: str = Field(..., env="BOT_USERNAME")
+    BOT_TOKEN: str = Field("test_token", env="BOT_TOKEN")
+    ADMIN_ID: int = Field(123456789, env="ADMIN_ID")
+    BOT_USERNAME: str = Field("testbot", env="BOT_USERNAME")
     DOMAIN: str = Field("localhost", env="DOMAIN")
-    WEBHOOK_URL: str = Field(None, env="WEBHOOK_URL")
+    WEBHOOK_URL: str = Field("", env="WEBHOOK_URL")
     DATABASE_URL: str = Field("sqlite+aiosqlite:///./zendanbot.db", env="DATABASE_URL")
     DEBUG: bool = Field(True, env="DEBUG")
     SECRET_KEY: str = Field("change-this-in-production", env="SECRET_KEY")
