@@ -1,0 +1,95 @@
+name: ZendanBOT CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.11', '3.12']
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip setuptools wheel
+        pip install -r requirements.txt
+
+    - name: Lint with flake8
+      run: |
+        pip install flake8
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+
+    - name: Test imports
+      run: |
+        python -c "
+        import sys; sys.path.insert(0, '.')
+        modules = [
+            ('app.config', 'settings'),
+            ('app.database', 'init_db'),
+            ('app.security', 'sanitize_text'),
+            ('app.models', 'User'),
+            ('app.bot.keyboards', 'main_menu'),
+            ('app.topics', 'get_topic_id'),
+            ('app.panels.marzban', 'MarzbanAPI'),
+            ('app.panels.remnawave', 'RemnawavePanel'),
+            ('app.panels.pasargad', 'PasargadPanel'),
+            ('app.panels.sui', 'SUIPanel'),
+            ('app.panels.mikrotik', 'MikrotikPanel'),
+            ('app.panels.wireguard', 'WGDashboardPanel'),
+            ('app.panels.eylan', 'EylanPanel'),
+            ('app.panels.marzneshin', 'MarzneshinPanel'),
+            ('app.payments.card', 'process_card_receipt'),
+            ('app.payments.nowpayment', 'NowPayment'),
+            ('app.payments.zarinpal', 'ZarinpalPayment'),
+            ('app.payments.plisio', 'PlisioPayment'),
+            ('app.payments.custom_gateway', 'CustomGateway'),
+            ('app.payments.rial_gateway', 'RialGateway'),
+            ('app.utils.qr_generator', 'generate_professional_qr'),
+        ]
+        ok = []
+        fail = []
+        for mod, attr in modules:
+            try:
+                m = __import__(mod, fromlist=[attr])
+                getattr(m, attr)
+                ok.append(mod)
+            except Exception as e:
+                fail.append(f'{mod}: {e}')
+        for m in ok:
+            print(f'  OK  {m}')
+        for m in fail:
+            print(f'  FAIL {m}')
+        if fail:
+            print(f'\n{len(fail)} failed!')
+            sys.exit(1)
+        else:
+            print(f'\nAll {len(ok)} modules OK')
+        "
+
+    - name: Test QR generation
+      run: |
+        python -c "
+        from app.utils.qr_generator import generate_professional_qr, generate_simple_qr
+        data = generate_simple_qr('https://test.com')
+        assert len(data) > 100, 'QR too small'
+        data2 = generate_professional_qr(
+            data='https://test.com',
+            card_title='Test',
+            style='rounded',
+        )
+        assert len(data2) > 100, 'Pro QR too small'
+        print('QR generation OK')
+        "
