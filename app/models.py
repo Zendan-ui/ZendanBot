@@ -4,8 +4,13 @@ from app.database import Base
 import json
 from datetime import datetime
 
+# Common table args to prevent redefinition errors
+EXTEND = {"extend_existing": True}
+
+
 class User(Base):
     __tablename__ = "user"
+    __table_args__ = (EXTEND,)
     id = Column(String(500), primary_key=True)
     limit_usertest = Column(Integer, default=0)
     roll_Status = Column(Boolean, default=True)
@@ -43,11 +48,12 @@ class User(Base):
     expire = Column(String(100), nullable=True)
     token = Column(String(100), nullable=True)
     lang = Column(String(5), default="fa")
-    # Additional fields from migrations in original
-    ref_code = Column(String(100), nullable=True)  # dropped in original but for completeness
+    ref_code = Column(String(100), nullable=True)
+
 
 class Setting(Base):
     __tablename__ = "setting"
+    __table_args__ = (EXTEND,)
     id = Column(Integer, primary_key=True, autoincrement=True)
     Bot_Status = Column(String(200), default="botstatuson")
     roll_Status = Column(String(200), default="rolleon")
@@ -99,9 +105,10 @@ class Setting(Base):
     cron_status = Column(Text, default=json.dumps({'day': True, 'volume': True, 'remove': False, 'remove_volume': False, 'test': False, 'on_hold': False, 'uptime_node': False, 'uptime_panel': False}))
     limitnumber = Column(String(200), default=json.dumps({'free': 100, 'all': 100}))
 
-# Add more models for panels, products, invoices, etc.
+
 class MarzbanPanel(Base):
     __tablename__ = "marzban_panel"
+    __table_args__ = (EXTEND,)
     id = Column(Integer, primary_key=True, autoincrement=True)
     code_panel = Column(String(200), nullable=True)
     name_panel = Column(String(2000), nullable=True)
@@ -146,8 +153,10 @@ class MarzbanPanel(Base):
     customvolume = Column(Text, default=json.dumps({'f': '0', 'n': '0', 'n2': '0'}))
     hide_user = Column(Text, nullable=True)
 
+
 class Product(Base):
     __tablename__ = "product"
+    __table_args__ = (EXTEND,)
     id = Column(Integer, primary_key=True, autoincrement=True)
     code_product = Column(String(200), nullable=True)
     name_product = Column(String(2000), nullable=True)
@@ -164,8 +173,10 @@ class Product(Base):
     category = Column(String(400), nullable=True)
     hide_panel = Column(Text, default="{}")
 
+
 class Invoice(Base):
     __tablename__ = "invoice"
+    __table_args__ = (EXTEND,)
     id_invoice = Column(String(200), primary_key=True)
     id_user = Column(String(200), nullable=True)
     username = Column(String(300), nullable=True)
@@ -184,11 +195,10 @@ class Invoice(Base):
     notifctions = Column(Text, nullable=True)
     Status = Column(String(200), nullable=True)
 
-# Add Payment_report, Discount, etc. similarly...
-# For brevity, I'll add a few more key ones. In full version, all tables from table.php should be here.
 
 class PaymentReport(Base):
     __tablename__ = "Payment_report"
+    __table_args__ = (EXTEND,)
     id = Column(Integer, primary_key=True, autoincrement=True)
     id_user = Column(String(200), nullable=True)
     id_order = Column(String(2000), nullable=True)
@@ -202,172 +212,47 @@ class PaymentReport(Base):
     message_id = Column(Integer, nullable=True)
     id_invoice = Column(String(1000), nullable=True)
 
+
 class Admin(Base):
     __tablename__ = "admin"
+    __table_args__ = (EXTEND,)
     id_admin = Column(String(500), primary_key=True)
     username = Column(String(1000), nullable=True)
     password = Column(String(1000), nullable=True)
     rule = Column(String(500), default="administrator")
-    permissions = Column(Text, default='{"all": true}')  # JSON: {"users": true, "payments": false, ...}
+    permissions = Column(Text, default='{"all": true}')
     added_by = Column(String(500), nullable=True)
     added_at = Column(String(100), default="")
 
-# ---- Advanced models from Mirza-level features ----
 
 class PaySetting(Base):
     __tablename__ = "PaySetting"
+    __table_args__ = (EXTEND,)
     NamePay = Column(String(500), primary_key=True)
     ValuePay = Column(Text, nullable=False)
 
-class NotificationLog(Base):
-    """Track notifications sent to users (volume/time warnings, marketing, etc.)"""
-    __tablename__ = "notification_log"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(String(200), nullable=True)
-    type = Column(String(100), nullable=True)  # volume_warn, time_warn, marketing, system
-    message = Column(Text, nullable=True)
-    sent_at = Column(String(100), nullable=True)
-    status = Column(String(50), default="sent")
-
-class FAQ(Base):
-    """Frequently Asked Questions"""
-    __tablename__ = "faq"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    question = Column(String(2000), nullable=True)
-    answer = Column(Text, nullable=True)
-    order_num = Column(Integer, default=0)
-
-class UserRule(Base):
-    """Custom rules/terms that users must accept before using the bot"""
-    __tablename__ = "user_rule"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    text = Column(Text, nullable=True)
-    is_active = Column(String(20), default="1")
-
-class WelcomeGift(Base):
-    """Welcome gift configuration for new users"""
-    __tablename__ = "welcome_gift"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    gift_type = Column(String(100), default="balance")  # balance, volume, time, score
-    amount = Column(String(200), default="0")
-    is_active = Column(String(20), default="0")
-
-class ServiceTransfer(Base):
-    """Track service transfers between users"""
-    __tablename__ = "service_transfer"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    invoice_id = Column(String(200), nullable=True)
-    from_user = Column(String(200), nullable=True)
-    to_user = Column(String(200), nullable=True)
-    transfer_time = Column(String(100), nullable=True)
-    status = Column(String(50), default="completed")
-
-class ServiceRating(Base):
-    """User ratings for services"""
-    __tablename__ = "service_rating"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(String(200), nullable=True)
-    invoice_id = Column(String(200), nullable=True)
-    rating = Column(Integer, default=0)  # 1-5 stars
-    comment = Column(Text, nullable=True)
-    rated_at = Column(String(100), nullable=True)
-
-class OperationQueue(Base):
-    """Queue for incomplete operations (e.g., when server is down)"""
-    __tablename__ = "operation_queue"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    operation = Column(String(100), nullable=True)  # create, extend, add_volume, remove, etc.
-    data = Column(Text, nullable=True)  # JSON encoded data
-    status = Column(String(50), default="pending")  # pending, processing, done, failed
-    panel_id = Column(Integer, nullable=True)
-    created_at = Column(String(100), nullable=True)
-    retry_count = Column(Integer, default=0)
-
-class PanelNode(Base):
-    """Panel nodes/servers for multi-node support"""
-    __tablename__ = "panel_node"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    panel_id = Column(Integer, nullable=True)
-    name = Column(String(500), nullable=True)
-    address = Column(String(1000), nullable=True)
-    status = Column(String(100), default="active")
-    last_check = Column(String(100), nullable=True)
-
-class UserLimit(Base):
-    """Per-product user limits (how many times user can buy a specific product)"""
-    __tablename__ = "user_limit"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(String(200), nullable=True)
-    product_id = Column(Integer, nullable=True)
-    limit_count = Column(Integer, default=1)
-    used_count = Column(Integer, default=0)
-
-class PaymentLock(Base):
-    """Payment gateway lock - show gateway only after X successful payments"""
-    __tablename__ = "payment_lock"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(String(200), nullable=True)
-    gateway_name = Column(String(200), nullable=True)
-    required_success_count = Column(Integer, default=3)
-    success_count = Column(Integer, default=0)
-    is_locked = Column(String(20), default="1")
-
-class CashbackSetting(Base):
-    """Cashback settings per payment gateway"""
-    __tablename__ = "cashback_setting"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    gateway_name = Column(String(200), primary_key=True)
-    percent = Column(String(20), default="0")
-    is_active = Column(String(20), default="0")
-
-class AutoReceipt(Base):
-    """Auto-receipt verification records"""
-    __tablename__ = "auto_receipt"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(String(200), nullable=True)
-    amount = Column(String(200), nullable=True)
-    photo_id = Column(String(1000), nullable=True)
-    status = Column(String(100), default="pending")  # pending, approved, rejected
-    verified_by = Column(String(200), default="auto")
-    created_at = Column(String(100), nullable=True)
-    verified_at = Column(String(100), nullable=True)
-
-class ExtendThreshold(Base):
-    """Extend threshold settings per product (prevent early extension)"""
-    __tablename__ = "extend_threshold"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    product_id = Column(Integer, nullable=True)
-    min_days_remaining = Column(Integer, default=3)  # Can extend only when less than X days left
-    is_active = Column(String(20), default="0")
-
-class NightlyReport(Base):
-    """Nightly report data"""
-    __tablename__ = "nightly_report"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    report_date = Column(String(100), nullable=True)
-    total_users = Column(Integer, default=0)
-    active_users = Column(Integer, default=0)
-    total_sales = Column(Integer, default=0)
-    total_revenue = Column(String(200), default="0")
-    best_hour = Column(String(50), nullable=True)
-    change_rate = Column(String(50), default="0%")
 
 class Channels(Base):
     __tablename__ = "channels"
+    __table_args__ = (EXTEND,)
     remark = Column(String(200), primary_key=True)
     linkjoin = Column(String(200))
     link = Column(String(200))
 
+
 class Discount(Base):
     __tablename__ = "Discount"
+    __table_args__ = (EXTEND,)
     id = Column(Integer, primary_key=True, autoincrement=True)
     code = Column(String(2000))
     price = Column(String(200))
     limituse = Column(String(200))
     limitused = Column(String(200))
 
+
 class DiscountSell(Base):
     __tablename__ = "DiscountSell"
+    __table_args__ = (EXTEND,)
     id = Column(Integer, primary_key=True, autoincrement=True)
     codeDiscount = Column(String(1000))
     price = Column(String(200))
@@ -381,8 +266,12 @@ class DiscountSell(Base):
     type = Column(String(100))
     usedDiscount = Column(String(500))
 
+
+# FIX: Affiliates now has a proper primary key
 class Affiliates(Base):
     __tablename__ = "affiliates"
+    __table_args__ = (EXTEND,)
+    id = Column(Integer, primary_key=True, autoincrement=True)
     description = Column(Text)
     status_commission = Column(String(200))
     Discount = Column(String(200))
@@ -390,13 +279,17 @@ class Affiliates(Base):
     porsant_one_buy = Column(String(100))
     id_media = Column(String(300))
 
+
 class ShopSetting(Base):
     __tablename__ = "shopSetting"
+    __table_args__ = (EXTEND,)
     Namevalue = Column(String(500), primary_key=True)
     value = Column(Text)
 
+
 class Help(Base):
     __tablename__ = "help"
+    __table_args__ = (EXTEND,)
     id = Column(Integer, primary_key=True, autoincrement=True)
     name_os = Column(String(500))
     Media_os = Column(String(5000))
@@ -404,13 +297,17 @@ class Help(Base):
     category = Column(Text)
     Description_os = Column(Text)
 
+
 class TopicID(Base):
     __tablename__ = "topicid"
+    __table_args__ = (EXTEND,)
     report = Column(String(500), primary_key=True)
     idreport = Column(Text)
 
+
 class WheelList(Base):
     __tablename__ = "wheel_list"
+    __table_args__ = (EXTEND,)
     id = Column(Integer, primary_key=True, autoincrement=True)
     id_user = Column(String(200))
     time = Column(String(200))
@@ -418,8 +315,10 @@ class WheelList(Base):
     wheel_code = Column(String(200))
     price = Column(String(200))
 
+
 class Botsaz(Base):
     __tablename__ = "botsaz"
+    __table_args__ = (EXTEND,)
     id = Column(Integer, primary_key=True, autoincrement=True)
     id_user = Column(String(200))
     bot_token = Column(String(200))
@@ -429,13 +328,17 @@ class Botsaz(Base):
     hide_panel = Column(JSON, default={})
     time = Column(String(200))
 
+
 class Category(Base):
     __tablename__ = "category"
+    __table_args__ = (EXTEND,)
     id = Column(Integer, primary_key=True, autoincrement=True)
     remark = Column(String(500))
 
+
 class SupportMessage(Base):
     __tablename__ = "support_message"
+    __table_args__ = (EXTEND,)
     id = Column(Integer, primary_key=True, autoincrement=True)
     Tracking = Column(String(100))
     idsupport = Column(String(100))
@@ -446,12 +349,162 @@ class SupportMessage(Base):
     time = Column(String(200))
     status = Column(Enum('Answered', 'Pending', 'Unseen', 'Customerresponse', 'close', name='support_status'))
 
-# Function to initialize default settings (similar to table.php)
+
+# ---- Advanced models ----
+
+class NotificationLog(Base):
+    __tablename__ = "notification_log"
+    __table_args__ = (EXTEND,)
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(200), nullable=True)
+    type = Column(String(100), nullable=True)
+    message = Column(Text, nullable=True)
+    sent_at = Column(String(100), nullable=True)
+    status = Column(String(50), default="sent")
+
+
+class FAQ(Base):
+    __tablename__ = "faq"
+    __table_args__ = (EXTEND,)
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    question = Column(String(2000), nullable=True)
+    answer = Column(Text, nullable=True)
+    order_num = Column(Integer, default=0)
+
+
+class UserRule(Base):
+    __tablename__ = "user_rule"
+    __table_args__ = (EXTEND,)
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    text = Column(Text, nullable=True)
+    is_active = Column(String(20), default="1")
+
+
+class WelcomeGift(Base):
+    __tablename__ = "welcome_gift"
+    __table_args__ = (EXTEND,)
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    gift_type = Column(String(100), default="balance")
+    amount = Column(String(200), default="0")
+    is_active = Column(String(20), default="0")
+
+
+class ServiceTransfer(Base):
+    __tablename__ = "service_transfer"
+    __table_args__ = (EXTEND,)
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    invoice_id = Column(String(200), nullable=True)
+    from_user = Column(String(200), nullable=True)
+    to_user = Column(String(200), nullable=True)
+    transfer_time = Column(String(100), nullable=True)
+    status = Column(String(50), default="completed")
+
+
+class ServiceRating(Base):
+    __tablename__ = "service_rating"
+    __table_args__ = (EXTEND,)
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(200), nullable=True)
+    invoice_id = Column(String(200), nullable=True)
+    rating = Column(Integer, default=0)
+    comment = Column(Text, nullable=True)
+    rated_at = Column(String(100), nullable=True)
+
+
+class OperationQueue(Base):
+    __tablename__ = "operation_queue"
+    __table_args__ = (EXTEND,)
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    operation = Column(String(100), nullable=True)
+    data = Column(Text, nullable=True)
+    status = Column(String(50), default="pending")
+    panel_id = Column(Integer, nullable=True)
+    created_at = Column(String(100), nullable=True)
+    retry_count = Column(Integer, default=0)
+
+
+class PanelNode(Base):
+    __tablename__ = "panel_node"
+    __table_args__ = (EXTEND,)
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    panel_id = Column(Integer, nullable=True)
+    name = Column(String(500), nullable=True)
+    address = Column(String(1000), nullable=True)
+    status = Column(String(100), default="active")
+    last_check = Column(String(100), nullable=True)
+
+
+class UserLimit(Base):
+    __tablename__ = "user_limit"
+    __table_args__ = (EXTEND,)
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(200), nullable=True)
+    product_id = Column(Integer, nullable=True)
+    limit_count = Column(Integer, default=1)
+    used_count = Column(Integer, default=0)
+
+
+class PaymentLock(Base):
+    __tablename__ = "payment_lock"
+    __table_args__ = (EXTEND,)
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(200), nullable=True)
+    gateway_name = Column(String(200), nullable=True)
+    required_success_count = Column(Integer, default=3)
+    success_count = Column(Integer, default=0)
+    is_locked = Column(String(20), default="1")
+
+
+# FIX: removed duplicate primary_key on gateway_name
+class CashbackSetting(Base):
+    __tablename__ = "cashback_setting"
+    __table_args__ = (EXTEND,)
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    gateway_name = Column(String(200), nullable=False, unique=True)
+    percent = Column(String(20), default="0")
+    is_active = Column(String(20), default="0")
+
+
+class AutoReceipt(Base):
+    __tablename__ = "auto_receipt"
+    __table_args__ = (EXTEND,)
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(200), nullable=True)
+    amount = Column(String(200), nullable=True)
+    photo_id = Column(String(1000), nullable=True)
+    status = Column(String(100), default="pending")
+    verified_by = Column(String(200), default="auto")
+    created_at = Column(String(100), nullable=True)
+    verified_at = Column(String(100), nullable=True)
+
+
+class ExtendThreshold(Base):
+    __tablename__ = "extend_threshold"
+    __table_args__ = (EXTEND,)
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    product_id = Column(Integer, nullable=True)
+    min_days_remaining = Column(Integer, default=3)
+    is_active = Column(String(20), default="0")
+
+
+class NightlyReport(Base):
+    __tablename__ = "nightly_report"
+    __table_args__ = (EXTEND,)
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    report_date = Column(String(100), nullable=True)
+    total_users = Column(Integer, default=0)
+    active_users = Column(Integer, default=0)
+    total_sales = Column(Integer, default=0)
+    total_revenue = Column(String(200), default="0")
+    best_hour = Column(String(50), nullable=True)
+    change_rate = Column(String(50), default="0%")
+
+
+# Function to initialize default settings
 async def init_default_settings():
     from sqlalchemy.future import select
     from app.database import async_session
     async with async_session() as session:
-        # Setting table
         result = await session.execute(select(Setting).limit(1))
         if not result.scalar_one_or_none():
             default_setting = Setting()
@@ -459,7 +512,6 @@ async def init_default_settings():
             await session.commit()
             print("✅ Default Setting row inserted.")
 
-        # PaySetting defaults (very important - all gateways enabled by default)
         pay_defaults = [
             ("Cartstatus", "oncard"), ("nowpaymentstatus", "offnowpayment"),
             ("statusaqayepardakht", "offaqayepardakht"), ("zarinpalstatus", "offzarinpal"),
@@ -486,6 +538,5 @@ async def init_default_settings():
             if not exists.scalar_one_or_none():
                 session.add(PaySetting(NamePay=name, ValuePay=value))
         await session.commit()
-        print("✅ PaySetting defaults initialized (all features free).")
-
+        print("✅ PaySetting defaults initialized.")
         print("🎉 ZendanBOT default settings initialized successfully!")
