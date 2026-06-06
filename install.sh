@@ -1,21 +1,17 @@
 #!/usr/bin/env bash
-set -euo pipefail
-
 # ============================================
 #  ZendanBOT v2.0 - Installer
 #  Tested: Ubuntu 20/22/24, Debian 11/12,
 #          CentOS 8/9, Rocky 8/9, AlmaLinux 9
 # ============================================
 
-# ---------- constants ----------
 INSTALL_DIR="/opt/ZendanBot"
 REPO_URL="https://github.com/Zendan-ui/ZendanBot.git"
 SERVICE_NAME="zendanbot"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 BACKUP_SCRIPT="${INSTALL_DIR}/backup.sh"
-LOG_FILE="/tmp/zendanbot_install.log"
 
-# ---------- helpers ----------
+# Colors
 BOLD='\033[1m'
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -28,17 +24,12 @@ log()  { echo -e "${GREEN}[✓]${NC} $*"; }
 warn() { echo -e "${YELLOW}[!]${NC} $*"; }
 err()  { echo -e "${RED}[✗]${NC} $*" >&2; }
 info() { echo -e "${BLUE}[i]${NC} $*"; }
-
-separator() {
-    echo -e "${CYAN}──────────────────────────────────────────────${NC}"
-}
-
-die() { err "$@"; exit 1; }
+sep()  { echo -e "${CYAN}──────────────────────────────────────────────${NC}"; }
+die()  { err "$@"; exit 1; }
 
 # ---------- detect OS ----------
 detect_os() {
     if [[ -f /etc/os-release ]]; then
-        # shellcheck disable=SC1091
         source /etc/os-release
         echo "$ID"
     elif command -v dnf &>/dev/null; then
@@ -54,42 +45,42 @@ install_packages() {
     os=$(detect_os)
     info "OS: $os"
 
-    local pkgs=(python3 python3-pip python3-venv git curl wget sqlite3)
-
     case "$os" in
         ubuntu|debian|linuxmint|pop)
-            sudo apt-get update -qq
-            sudo apt-get install -y -qq "${pkgs[@]}" python3-dev libffi-dev libssl-dev 2>/dev/null
+            apt-get update -qq 2>/dev/null || true
+            apt-get install -y python3 python3-pip python3-venv python3-dev \
+                git curl wget sqlite3 libffi-dev libssl-dev 2>/dev/null || true
             ;;
         centos|rhel|rocky|almalinux)
-            sudo dnf install -y "${pkgs[@]}" python3-devel libffi-devel openssl-devel 2>/dev/null \
-                || sudo yum install -y "${pkgs[@]}" python3-devel libffi-devel openssl-devel 2>/dev/null
+            dnf install -y python3 python3-pip python3-devel git curl wget \
+                sqlite libffi-devel openssl-devel 2>/dev/null || \
+            yum install -y python3 python3-pip python3-devel git curl wget \
+                sqlite libffi-devel openssl-devel 2>/dev/null || true
             ;;
         fedora)
-            sudo dnf install -y "${pkgs[@]}" python3-devel libffi-devel openssl-devel
+            dnf install -y python3 python3-pip python3-devel git curl wget \
+                sqlite libffi-devel openssl-devel 2>/dev/null || true
             ;;
         *)
             warn "Unknown distro — trying apt..."
-            sudo apt-get update -qq 2>/dev/null || true
-            sudo apt-get install -y -qq "${pkgs[@]}" 2>/dev/null || true
+            apt-get update -qq 2>/dev/null || true
+            apt-get install -y python3 python3-pip python3-venv git curl wget sqlite3 2>/dev/null || true
             ;;
     esac
-    log "System packages installed."
+    log "System packages done."
 }
 
-# ---------- python check ----------
+# ---------- python ----------
 find_python() {
-    local candidates=(python3.12 python3.11 python3 python)
-    for cmd in "${candidates[@]}"; do
+    for cmd in python3.12 python3.11 python3 python; do
         if command -v "$cmd" &>/dev/null; then
             local ver
-            ver=$("$cmd" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
-            local major minor
-            major=${ver%%.*}
-            minor=${ver#*.}
-            if (( major >= 3 && minor >= 10 )); then
+            ver=$("$cmd" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null) || continue
+            local major=${ver%%.*}
+            local minor=${ver#*.}
+            if [[ "$major" -ge 3 && "$minor" -ge 10 ]]; then
                 echo "$cmd"
-                return
+                return 0
             fi
         fi
     done
@@ -100,24 +91,26 @@ ensure_python() {
     local py
     py=$(find_python)
     if [[ -n "$py" ]]; then
-        log "Python OK: $($py --version 2>&1)"
+        log "Python: $($py --version 2>&1)" >&2
         echo "$py"
-        return
+        return 0
     fi
 
-    warn "Python 3.10+ not found — installing deadsnakes PPA..."
+    warn "Python 3.10+ not found — installing..." >&2
     local os
     os=$(detect_os)
     if [[ "$os" == "ubuntu" || "$os" == "debian" ]]; then
-        sudo apt-get install -y software-properties-common
-        sudo add-apt-repository -y ppa:deadsnakes/ppa 2>/dev/null || true
-        sudo apt-get update -qq
-        sudo apt-get install -y python3.12 python3.12-venv python3.12-dev
-        log "Python 3.12 installed."
-        echo "python3.12"
-    else
-        die "Install Python 3.10+ manually and re-run."
+        apt-get install -y software-properties-common 2>/dev/null || true
+        add-apt-repository -y ppa:deadsnakes/ppa 2>/dev/null || true
+        apt-get update -qq 2>/dev/null || true
+        apt-get install -y python3.12 python3.12-venv python3.12-dev 2>/dev/null || true
+        if command -v python3.12 &>/dev/null; then
+            log "Python 3.12 installed." >&2
+            echo "python3.12"
+            return 0
+        fi
     fi
+    die "Install Python 3.10+ manually and re-run."
 }
 
 # ---------- clone / update ----------
@@ -125,29 +118,27 @@ get_code() {
     if [[ -d "$INSTALL_DIR/.git" ]]; then
         info "Updating existing installation..."
         cd "$INSTALL_DIR"
-        git pull --ff-only || warn "Git pull failed — continuing with local files."
+        git pull 2>/dev/null || warn "Git pull failed — using local files."
     else
         info "Cloning repository..."
-        sudo rm -rf "$INSTALL_DIR"
-        git clone "$REPO_URL" "$INSTALL_DIR"
+        rm -rf "$INSTALL_DIR" 2>/dev/null || true
+        git clone "$REPO_URL" "$INSTALL_DIR" || die "Git clone failed. Check internet."
     fi
-    cd "$INSTALL_DIR"
+    cd "$INSTALL_DIR" || die "Cannot cd to $INSTALL_DIR"
     log "Code ready at ${INSTALL_DIR}"
 }
 
-# ---------- venv + pip ----------
+# ---------- venv ----------
 setup_venv() {
     local py="$1"
     info "Creating virtual environment..."
-    rm -rf venv
-    "$py" -m venv venv
-    # shellcheck disable=SC1091
-    source venv/bin/activate
+    rm -rf venv 2>/dev/null || true
+    "$py" -m venv venv || die "Failed to create venv."
+    source venv/bin/activate || die "Failed to activate venv."
 
-    pip install --upgrade pip setuptools wheel --quiet
-    pip install -r requirements.txt --quiet 2>/dev/null \
-        || pip install -r requirements.txt
-
+    pip install --upgrade pip setuptools wheel --quiet 2>/dev/null
+    info "Installing Python packages..."
+    pip install -r requirements.txt 2>/dev/null || pip install -r requirements.txt
     log "Python dependencies installed."
 }
 
@@ -155,23 +146,23 @@ setup_venv() {
 setup_env() {
     if [[ -f .env ]]; then
         warn ".env already exists."
-        read -rp "   Edit it now? [y/N]: " ans
+        read -rp "   Edit now? [y/N]: " ans
         [[ "${ans,,}" == "y" ]] && ${EDITOR:-nano} .env
-        return
+        return 0
     fi
 
     cp .env.example .env
 
     echo ""
-    separator
+    sep
     echo -e "${BOLD}${CYAN}  ⚙  Configuration${NC}"
-    separator
+    sep
     echo ""
 
     read -rp "  Bot Token (from @BotFather): " bot_token
     read -rp "  Admin Telegram ID (from @userinfobot): " admin_id
     read -rp "  Bot Username (e.g. zendanbot): " bot_user
-    read -rp "  Domain for webhook (leave empty for polling): " domain
+    read -rp "  Domain for webhook (empty = polling): " domain
 
     local db_url="sqlite+aiosqlite:///./zendanbot.db"
     read -rp "  Use PostgreSQL? [y/N]: " use_pg
@@ -187,12 +178,10 @@ setup_env() {
         db_url="postgresql+asyncpg://${pg_user}:${pg_pass}@${pg_host}:${pg_port}/${pg_db}"
     fi
 
-    # Generate random secret
     local secret
-    secret=$(openssl rand -hex 32 2>/dev/null || python3 -c 'import secrets; print(secrets.token_hex(32))')
+    secret=$(openssl rand -hex 32 2>/dev/null || python3 -c 'import secrets; print(secrets.token_hex(32))' 2>/dev/null || echo "change-me-$(date +%s)")
 
-    # Write .env
-    cat > .env <<ENVFILE
+    cat > .env <<EOF
 BOT_TOKEN=${bot_token}
 ADMIN_ID=${admin_id}
 BOT_USERNAME=${bot_user}
@@ -201,10 +190,10 @@ WEBHOOK_URL=
 DATABASE_URL=${db_url}
 SECRET_KEY=${secret}
 DEBUG=false
-ENVFILE
+EOF
 
     log ".env written."
-    read -rp "  Review / edit .env? [y/N]: " ans
+    read -rp "  Review .env? [y/N]: " ans
     [[ "${ans,,}" == "y" ]] && ${EDITOR:-nano} .env
 }
 
@@ -212,7 +201,7 @@ ENVFILE
 setup_systemd() {
     local venv_python="${INSTALL_DIR}/venv/bin/python"
 
-    sudo tee "$SERVICE_FILE" >/dev/null <<EOF
+    cat > "$SERVICE_FILE" <<EOF
 [Unit]
 Description=ZendanBOT - VPN Sales Telegram Bot
 After=network-online.target
@@ -229,56 +218,51 @@ StandardOutput=journal
 StandardError=journal
 Environment=PYTHONUNBUFFERED=1
 
-# Security hardening
-NoNewPrivileges=true
-ProtectSystem=strict
-ReadWritePaths=${INSTALL_DIR}
-
 [Install]
 WantedBy=multi-user.target
 EOF
 
-    sudo systemctl daemon-reload
-    sudo systemctl enable "${SERVICE_NAME}" 2>/dev/null
-
-    log "systemd service installed and enabled."
+    systemctl daemon-reload
+    systemctl enable "${SERVICE_NAME}" 2>/dev/null || true
+    log "systemd service installed."
 }
 
-# ---------- backup cron ----------
-setup_backup_cron() {
+# ---------- backup ----------
+setup_backup() {
+    mkdir -p "${INSTALL_DIR}/backups" 2>/dev/null || true
+
     cat > "$BACKUP_SCRIPT" <<'BKEOF'
 #!/usr/bin/env bash
-set -euo pipefail
 DIR="/opt/ZendanBot/backups"
-mkdir -p "$DIR"
+mkdir -p "$DIR" 2>/dev/null || exit 0
 TS=$(date +%Y%m%d_%H%M%S)
 cp /opt/ZendanBot/zendanbot.db "${DIR}/zendanbot_${TS}.db" 2>/dev/null || true
 find "$DIR" -name 'zendanbot_*.db' -mtime +7 -delete 2>/dev/null || true
-echo "[$(date)] backup done: zendanbot_${TS}.db" >> "${DIR}/backup.log"
+echo "[$(date)] backup: zendanbot_${TS}.db" >> "${DIR}/backup.log" 2>/dev/null || true
 BKEOF
     chmod +x "$BACKUP_SCRIPT"
 
-    # Install cron only if not already present
     if ! crontab -l 2>/dev/null | grep -q "$BACKUP_SCRIPT"; then
-        (crontab -l 2>/dev/null; echo "0 3 * * * ${BACKUP_SCRIPT}") | crontab -
+        (crontab -l 2>/dev/null; echo "0 3 * * * ${BACKUP_SCRIPT}") | crontab - 2>/dev/null || true
     fi
     log "Daily backup cron set (03:00)."
 }
 
-# ---------- nginx + SSL ----------
+# ---------- nginx ----------
 setup_nginx() {
-    read -rp "  Configure Nginx reverse-proxy for webhook? [y/N]: " ans
-    [[ "${ans,,}" != "y" ]] && return
+    read -rp "  Configure Nginx for webhook? [y/N]: " ans
+    [[ "${ans,,}" != "y" ]] && return 0
 
     read -rp "    Domain: " domain
-    [[ -z "$domain" ]] && { warn "Skipped."; return; }
+    [[ -z "$domain" ]] && { warn "Skipped."; return 0; }
 
     local conf="/etc/nginx/sites-available/zendanbot"
-    sudo tee "$conf" >/dev/null <<EOF
+    mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled 2>/dev/null || true
+
+    cat > "$conf" <<EOF
 server {
     listen 80;
     server_name ${domain};
-
     location /webhook {
         proxy_pass http://127.0.0.1:8000;
         proxy_set_header Host \$host;
@@ -288,25 +272,22 @@ server {
     }
 }
 EOF
-    sudo ln -sf "$conf" /etc/nginx/sites-enabled/ 2>/dev/null || true
-    sudo nginx -t && sudo systemctl reload nginx
-    log "Nginx configured for ${domain}"
+    ln -sf "$conf" /etc/nginx/sites-enabled/ 2>/dev/null || true
+    nginx -t 2>/dev/null && systemctl reload nginx 2>/dev/null && log "Nginx configured." || warn "Nginx setup failed."
 
-    read -rp "    Install SSL (Let's Encrypt)? [y/N]: " ssl_ans
+    read -rp "    Install SSL? [y/N]: " ssl_ans
     if [[ "${ssl_ans,,}" == "y" ]]; then
-        read -rp "      Email for certbot: " email
-        sudo apt-get install -y certbot python3-certbot-nginx 2>/dev/null || true
-        sudo certbot --nginx -d "$domain" --non-interactive --agree-tos -m "$email" 2>/dev/null \
-            && log "SSL installed." \
-            || warn "certbot failed — run manually."
+        read -rp "      Email: " email
+        apt-get install -y certbot python3-certbot-nginx 2>/dev/null || true
+        certbot --nginx -d "$domain" --non-interactive --agree-tos -m "$email" 2>/dev/null && log "SSL done." || warn "certbot failed."
     fi
 }
 
-# ---------- quick import test ----------
+# ---------- test ----------
 run_test() {
     info "Testing imports..."
-    cd "$INSTALL_DIR"
-    source venv/bin/activate
+    cd "$INSTALL_DIR" || return
+    source venv/bin/activate || return
 
     python3 -c "
 import sys; sys.path.insert(0, '.')
@@ -333,95 +314,82 @@ for mod, attr in mods:
         ok.append(mod)
     except Exception as e:
         fail.append(f'{mod}: {e}')
-
-print()
 for m in ok:
-    print(f'  ✅ {m}')
+    print(f'  OK  {m}')
 for m in fail:
-    print(f'  ❌ {m}')
-print()
+    print(f'  FAIL {m}')
 if fail:
-    print(f'⚠  {len(fail)} module(s) had issues.')
+    print(f'\n{len(fail)} module(s) had issues.')
 else:
-    print(f'🎉 All {len(ok)} modules OK!')
+    print(f'\nAll {len(ok)} modules OK!')
 " 2>&1 || true
 }
 
 # ---------- start ----------
 start_bot() {
-    sudo systemctl restart "${SERVICE_NAME}"
+    systemctl restart "${SERVICE_NAME}" 2>/dev/null || true
     sleep 2
-    if sudo systemctl is-active --quiet "${SERVICE_NAME}"; then
+    if systemctl is-active --quiet "${SERVICE_NAME}" 2>/dev/null; then
         log "Bot is running."
     else
-        err "Bot failed to start. Check: journalctl -u ${SERVICE_NAME} -n 50"
+        warn "Bot may have issues. Check: journalctl -u ${SERVICE_NAME} -n 50"
     fi
 }
 
-# ---------- print summary ----------
+# ---------- summary ----------
 print_summary() {
     echo ""
-    separator
-    echo -e "${BOLD}${CYAN}  🛡️  ZendanBOT Installed Successfully${NC}"
-    separator
+    sep
+    echo -e "${BOLD}${CYAN}  🛡️  ZendanBOT Installed${NC}"
+    sep
     echo ""
-    echo "  📂  Directory:  ${INSTALL_DIR}"
+    echo "  📂 Directory:  ${INSTALL_DIR}"
     echo "  ⚙️  Config:     ${INSTALL_DIR}/.env"
     echo "  🗃️  Database:   ${INSTALL_DIR}/zendanbot.db"
-    echo "  📋  Logs:       journalctl -u ${SERVICE_NAME} -f"
+    echo "  📋 Logs:       journalctl -u ${SERVICE_NAME} -f"
     echo ""
     echo -e "  ${BOLD}Commands:${NC}"
-    echo "    start    sudo systemctl start   ${SERVICE_NAME}"
-    echo "    stop     sudo systemctl stop    ${SERVICE_NAME}"
-    echo "    restart  sudo systemctl restart ${SERVICE_NAME}"
-    echo "    status   sudo systemctl status  ${SERVICE_NAME}"
-    echo "    logs     journalctl -u ${SERVICE_NAME} -f"
+    echo "    sudo systemctl start   ${SERVICE_NAME}"
+    echo "    sudo systemctl stop    ${SERVICE_NAME}"
+    echo "    sudo systemctl restart ${SERVICE_NAME}"
+    echo "    sudo systemctl status  ${SERVICE_NAME}"
     echo ""
-    echo -e "  ${BOLD}Telegram:${NC}"
-    echo "    /start   → main menu"
-    echo "    /panel   → admin panel"
+    echo -e "  ${BOLD}Telegram:${NC}  /start  /panel"
     echo ""
-    echo -e "  ${BOLD}Panels supported:${NC}  Marzban • X-UI • S-UI • Hiddify • Remnawave"
-    echo "  ${BOLD}              ${NC}  Pasargad • Marzneshin • Mikrotik • Eylan"
-    echo "  ${BOLD}              ${NC}  WGDashboard • IBSng • Alireza"
+    echo -e "  ${BOLD}Panels:${NC}  Marzban X-UI S-UI Hiddify Remnawave Pasargad"
+    echo "           Marzneshin Mikrotik Eylan WGDashboard IBSng Alireza"
     echo ""
-    separator
+    sep
 }
 
 # ==================== MAIN ====================
-main() {
-    echo ""
-    separator
-    echo -e "${BOLD}${CYAN}  🛡️  ZendanBOT v2.0 Installer${NC}"
-    separator
-    echo ""
+echo ""
+sep
+echo -e "${BOLD}${CYAN}  🛡️  ZendanBOT v2.0 Installer${NC}"
+sep
+echo ""
 
-    # Must be run as root or with sudo
-    if [[ "$(id -u)" -ne 0 ]]; then
-        # Re-run with sudo
-        warn "Re-running with sudo..."
-        exec sudo bash "$0" "$@"
-    fi
+# Root check
+if [[ "$(id -u)" -ne 0 ]]; then
+    warn "Re-running with sudo..."
+    exec sudo bash "$0" "$@"
+fi
 
-    local PY
+PY=""
+install_packages
+PY=$(ensure_python)
+get_code
+setup_venv "$PY"
+setup_env
+setup_systemd
+setup_backup
+setup_nginx
+run_test
 
-    install_packages
-    PY=$(ensure_python)
-    get_code
-    setup_venv "$PY"
-    setup_env
-    setup_systemd
-    setup_backup_cron
-    setup_nginx
-    run_test
+echo ""
+read -rp "Start the bot now? [Y/n]: " start_ans
+if [[ "${start_ans,,}" != "n" ]]; then
+    start_bot
+fi
 
-    echo ""
-    read -rp "Start the bot now? [Y/n]: " start_ans
-    if [[ "${start_ans,,}" != "n" ]]; then
-        start_bot
-    fi
-
-    print_summary
-}
-
-main "$@"
+print_summary
