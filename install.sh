@@ -48,8 +48,11 @@ install_packages() {
     case "$os" in
         ubuntu|debian|linuxmint|pop)
             apt-get update -qq 2>/dev/null || true
+            # Install python3 and common version-specific venv packages
             apt-get install -y python3 python3-pip python3-venv python3-dev \
-                git curl wget sqlite3 libffi-dev libssl-dev 2>/dev/null || true
+                python3.11-venv python3.12-venv python3.13-venv \
+                git curl wget sqlite3 libffi-dev libssl-dev \
+                software-properties-common 2>/dev/null || true
             ;;
         centos|rhel|rocky|almalinux)
             dnf install -y python3 python3-pip python3-devel git curl wget \
@@ -133,7 +136,29 @@ setup_venv() {
     local py="$1"
     info "Creating virtual environment..."
     rm -rf venv 2>/dev/null || true
-    "$py" -m venv venv || die "Failed to create venv."
+
+    # Try creating venv; if it fails, install the matching -venv package
+    if ! "$py" -m venv venv 2>/dev/null; then
+        warn "venv creation failed — installing missing package..."
+        local ver
+        ver=$("$py" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || echo "")
+        if [[ -n "$ver" ]]; then
+            local os
+            os=$(detect_os)
+            case "$os" in
+                ubuntu|debian|linuxmint|pop)
+                    apt-get update -qq 2>/dev/null || true
+                    apt-get install -y "python${ver}-venv" "python${ver}-dev" 2>/dev/null || true
+                    ;;
+                centos|rhel|rocky|almalinux|fedora)
+                    dnf install -y "python${ver}-devel" 2>/dev/null || true
+                    ;;
+            esac
+        fi
+        # Retry
+        "$py" -m venv venv || die "Failed to create venv even after installing python${ver}-venv. Run: apt install python${ver}-venv"
+    fi
+
     source venv/bin/activate || die "Failed to activate venv."
 
     pip install --upgrade pip setuptools wheel --quiet 2>/dev/null
