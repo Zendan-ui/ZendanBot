@@ -4,7 +4,7 @@ from app.database import async_session
 from app.models import Product, MarzbanPanel
 from sqlalchemy.future import select
 
-async def main_menu(lang: str = "fa") -> ReplyKeyboardMarkup:
+def main_menu(lang: str = "fa") -> ReplyKeyboardMarkup:
     builder = ReplyKeyboardBuilder()
     builder.row(
         KeyboardButton(text="🛍 خرید سرویس"),

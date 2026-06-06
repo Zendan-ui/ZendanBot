@@ -187,7 +187,8 @@ setup_env() {
     read -rp "  Bot Token (from @BotFather): " bot_token
     read -rp "  Admin Telegram ID (from @userinfobot): " admin_id
     read -rp "  Bot Username (e.g. zendanbot): " bot_user
-    read -rp "  Domain for webhook (empty = polling): " domain
+    # No domain / webhook — ZendanBOT runs in pure long-polling mode.
+    domain=""
 
     local db_url="sqlite+aiosqlite:///./zendanbot.db"
     read -rp "  Use PostgreSQL? [y/N]: " use_pg
@@ -274,38 +275,10 @@ BKEOF
 }
 
 # ---------- nginx ----------
+# ZendanBOT runs in long-polling mode — no Nginx, SSL, domain or webhook needed.
 setup_nginx() {
-    read -rp "  Configure Nginx for webhook? [y/N]: " ans
-    [[ "${ans,,}" != "y" ]] && return 0
-
-    read -rp "    Domain: " domain
-    [[ -z "$domain" ]] && { warn "Skipped."; return 0; }
-
-    local conf="/etc/nginx/sites-available/zendanbot"
-    mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled 2>/dev/null || true
-
-    cat > "$conf" <<EOF
-server {
-    listen 80;
-    server_name ${domain};
-    location /webhook {
-        proxy_pass http://127.0.0.1:8000;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-    }
-}
-EOF
-    ln -sf "$conf" /etc/nginx/sites-enabled/ 2>/dev/null || true
-    nginx -t 2>/dev/null && systemctl reload nginx 2>/dev/null && log "Nginx configured." || warn "Nginx setup failed."
-
-    read -rp "    Install SSL? [y/N]: " ssl_ans
-    if [[ "${ssl_ans,,}" == "y" ]]; then
-        read -rp "      Email: " email
-        apt-get install -y certbot python3-certbot-nginx 2>/dev/null || true
-        certbot --nginx -d "$domain" --non-interactive --agree-tos -m "$email" 2>/dev/null && log "SSL done." || warn "certbot failed."
-    fi
+    info "Skipping Nginx/SSL setup — ZendanBOT uses long-polling (outbound only)."
+    return 0
 }
 
 # ---------- test ----------

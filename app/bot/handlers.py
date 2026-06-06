@@ -1020,4 +1020,3 @@ async def admin_reports(message: Message):
 # Best Telegram admin panel - comprehensive and beautiful
 # (Already expanded in previous stages with real DB updates, mass actions, etc.)
 
-print("✅ ZendanBOT Pure Bot - Fully Complete, Fast, Secure, All Real Features Implemented!")

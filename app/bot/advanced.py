@@ -487,4 +487,3 @@ async def queue_operation(op: str, data: dict, panel_id: int = None):
                                     created_at=str(int(datetime.now().timestamp())), status="pending"))
         await session.commit()
 
-print("✅ ZendanBOT Advanced Features loaded — 11 Panels, 9+ Gateways, Mirza-level features!")

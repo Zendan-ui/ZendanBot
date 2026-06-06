@@ -23,7 +23,7 @@ async def get_db() -> AsyncSession:
 async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    print("✅ ZendanBOT Database tables created/verified successfully.")
+    # table init complete
 
 # Helper for raw queries if needed (migrate from PHP style)
 async def execute_raw(query: str, params: dict = None):

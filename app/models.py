@@ -510,7 +510,7 @@ async def init_default_settings():
             default_setting = Setting()
             session.add(default_setting)
             await session.commit()
-            print("✅ Default Setting row inserted.")
+            # default setting inserted
 
         pay_defaults = [
             ("Cartstatus", "oncard"), ("nowpaymentstatus", "offnowpayment"),
@@ -538,5 +538,5 @@ async def init_default_settings():
             if not exists.scalar_one_or_none():
                 session.add(PaySetting(NamePay=name, ValuePay=value))
         await session.commit()
-        print("✅ PaySetting defaults initialized.")
-        print("🎉 ZendanBOT default settings initialized successfully!")
+        # pay settings initialized
+        # defaults ready

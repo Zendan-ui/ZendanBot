@@ -276,4 +276,3 @@ def _wrap_text(text: str, font, max_width: int, draw) -> list:
     return lines
 
 
-print("✅ Professional QR Code Generator loaded.")

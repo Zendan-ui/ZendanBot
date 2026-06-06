@@ -174,4 +174,3 @@ def secure_handler(func):
         return await func(message_or_callback, *args, **kwargs)
     return wrapper
 
-print("🔒 ZendanBOT Enterprise Security Layer loaded successfully — Telegram security fully hardened.")

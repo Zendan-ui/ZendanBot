@@ -1,147 +1,193 @@
-# 🛡️ ZendanBOT
+# ZendanBot
 
-**ZendanBOT** — پلتفرم حرفه‌ای، امن و کامل فروش سرویس‌های VPN (نسخه خالص بات تلگرام)
+Professional VPN sales and management bot for Telegram with support for
+11 panels (Marzban, XUI / 3X-UI, Hiddify, Alireza, SUI, WireGuard,
+MikroTik, Remnawave, Eylan, Pasargad, Marzneshin) and 9+ payment gateways
+(Zarinpal, AqayePardakht, NowPayment, Plisio, TRON, Telegram Stars,
+card-to-card, custom).
 
-نسخه نهایی ۲.۰ | تمام قابلیت‌های پیشرفته فعال | سریع، امن و واقعی | بدون پنل وب
-
----
-
-## ✨ ویژگی‌های کلیدی
-
-- **امنیت سطح Enterprise**: نرخ محدودسازی، ضد اسپم، اعتبارسنجی کامل ورودی‌ها، حفاظت ادمین، ضد فلود، sanitization خودکار و دکوراتور امنیتی روی تمام هندلرها.
-- **پنل ادمین تلگرامی بهترین حالت ممکن**: منوهای تمیز، سلسله‌مراتبی، زیبا و فارسی با تمام ابزارهای مدیریت (آمار، پیام همگانی، نمایندگان، تخفیف، سفارش دستی، هدیه، تنظیمات و ...).
-- **همه پنل‌ها**: Marzban، X-UI/3x-UI، Alireza، Hiddify، IBSng، Marzneshin و معماری قابل گسترش.
-- **همه روش‌های پرداخت**: کارت به کارت (با رسید امن)، NowPayments، Zarinpal، AqayePardakht، Tron/Tornado، Plisio، Telegram Stars و ...
-- **جریان‌های کامل کاربر**: خرید هوشمند (حجم/زمان دلخواه، عمده، یادداشت)، تمدید، حجم/زمان اضافه، تغییر لوکیشن، سرویس‌های خریداری شده با تمام اکشن‌ها (کانفیگ واقعی + QR کد، تغییر لینک واقعی، روشن/خاموش، انتقال، یادداشت).
-- **اتوماسیون کامل**: تمام کرون‌ها (هشدار حجم و زمان، حذف خودکار، آپتایم پنل/نود، گزارش شبانه، قرعه‌کشی، بکاپ، on-hold).
-- **ویژگی‌های پیشرفته**: زیرمجموعه‌گیری واقعی با کمیسیون، گردونه شانس، پشتیبانی با دپارتمان و تیکت + گروه تاپیک، آموزش‌ها، احراز شماره تلفن، چک کانال، امتیاز، بدهی، عملیات انبوه و ...
-- **QR کد واقعی + اتصال**: لینک‌های اشتراک با QR کد تولید و ارسال می‌شوند. کاربران می‌توانند اسکن کنند و مستقیم متصل شوند (با پنل واقعی کاملاً کار می‌کند).
-- **چندزبانه و حرفه‌ای**: پشتیبانی از فارسی، انگلیسی، روسی و چینی + تمام جریان‌ها با امنیت کامل.
+Runs in long-polling mode. No domain, no Nginx, no SSL, no webhook required.
 
 ---
 
-## 🔒 امنیت (تست شده)
+## Quick install (recommended)
 
-امنیت بات به صورت کامل تست و سخت‌گیرانه پیاده‌سازی شده:
-
-- تست sanitize_text، validate_amount، rate limiting، anti-spam و چک ادمین موفق.
-- همه ورودی‌ها sanitize می‌شوند.
-- Rate limit جدا برای پرداخت و اقدامات حساس.
-- ضد اسپم با cooldown.
-- فقط ادمین واقعی به پنل دسترسی دارد.
-- هیچ داده حساسی در لاگ‌ها لو نمی‌رود.
-- حفاظت کامل در برابر duplicate update و flood.
-
-**تست QR و اتصال**:
-- QR کد واقعی با `qrcode` و Pillow تولید و به کاربر ارسال می‌شود.
-- لینک اشتراک کامل (sub) تولید می‌شود.
-- با پنل واقعی (مثل Marzban) کاربر می‌تواند QR را اسکن کند و مستقیم متصل شود.
-- تست تولید QR موفق: فایل PNG معتبر ایجاد و ارسال می‌شود.
-
----
-
-## 📦 نصب حرفه‌ای (تمیز و بدون فایل اضافی)
-
-### پیش‌نیازها
-- Python 3.11+
-- (توصیه) PostgreSQL (برای SQLite هم کار می‌کند)
-- توکن بات تلگرام + آیدی ادمین
-
-### مراحل نصب
-
-1. **کلون یا کپی پروژه**
-   ```bash
-   cd /path/to/your/folder
-   # فایل‌های پروژه ZendanBOT را اینجا قرار دهید
-   ```
-
-2. **محیط مجازی و وابستگی‌ها**
-   ```bash
-   python -m venv venv
-   source venv/bin/activate   # لینوکس/مک
-   # یا venv\Scripts\activate در ویندوز
-
-   pip install -r requirements.txt
-   ```
-
-3. **تنظیمات (.env)**
-   ```bash
-   cp .env.example .env
-   nano .env
-   ```
-
-   محتوای `.env` (مثال):
-   ```
-   BOT_TOKEN=123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11
-   ADMIN_ID=123456789
-   BOT_USERNAME=zendanbot
-   DOMAIN=yourdomain.com
-   WEBHOOK_URL=https://yourdomain.com/webhook
-   DATABASE_URL=sqlite+aiosqlite:///./zendanbot.db
-   # برای Postgres: postgresql+asyncpg://user:pass@localhost/zendanbot
-   SECRET_KEY=your-very-strong-secret-key-here
-   DEBUG=false
-   ```
-
-4. **اجرای بات (سریع و خالص)**
-   ```bash
-   python main.py
-   ```
-
-   - بات در حالت polling اجرا می‌شود (برای تست سریع).
-   - برای تولید: `WEBHOOK_URL` را ست کنید (وب‌هوک امن).
-
-### نصب با Docker (توصیه برای تولید)
-
-`Dockerfile` ساده:
-```dockerfile
-FROM python:3.11-slim
-WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-COPY . .
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
-```
-
-اجرا:
 ```bash
-docker build -t zendanbot .
-docker run -p 8000:8000 --env-file .env zendanbot
+wget https://raw.githubusercontent.com/Zendan-ui/ZendanBot/main/setup.sh
+sudo bash setup.sh
 ```
 
-### نکات امنیتی
-- هرگز `.env` را کامیت نکنید.
-- از توکن قوی و SECRET_KEY استفاده کنید.
-- در تولید از Postgres + Nginx + SSL استفاده کنید.
-- لاگ‌ها را مانیتور کنید.
-- توکن بات را به صورت دوره‌ای بچرخانید.
+The installer will:
+
+1. install Python 3.10+, git, build tools
+2. clone the repo to `/opt/ZendanBot`
+3. create a virtualenv and install dependencies
+4. ask for `BOT_TOKEN`, `ADMIN_ID`, `BOT_USERNAME` and write `.env`
+5. verify the token against the Telegram API
+6. create and start a `zendanbot` systemd service
+
+Then open Telegram and send `/start` to your bot.
 
 ---
 
-## 🚀 شروع سریع
+## Manual install
 
-1. بات را اجرا کنید.
-2. در تلگرام `/start` بزنید.
-3. از منوی زیبا استفاده کنید (خرید، کیف پول، سرویس‌ها و ...).
-4. برای ادمین: `/panel` بزنید (منوی کامل ادمین باز می‌شود).
-5. برای ادمین کامل: از دستور `/panel` در تلگرام استفاده کنید (بهترین پنل ادمین تلگرامی).
+```bash
+git clone https://github.com/Zendan-ui/ZendanBot.git
+cd ZendanBot
+python3 -m venv venv
+source venv/bin/activate
+pip install -U pip
+pip install -r requirements.txt
+cp .env.example .env
+nano .env          # fill BOT_TOKEN, ADMIN_ID, BOT_USERNAME
+python main.py
+```
 
-**تست سریع**:
-- خرید کنید → سرویس واقعی روی پنل ساخته می‌شود.
-- سرویس بخرید → QR کد واقعی دریافت کنید و اسکن کنید (اتصال کار می‌کند).
-- امنیت: تلاش برای اسپم یا دسترسی غیرمجاز بلاک می‌شود.
+Expected output:
+
+```
+Starting ZendanBOT v2.0.0
+Logged in as @YourBot (id=...)
+Old webhook (if any) removed
+Bot is running in long-polling mode.
+```
 
 ---
 
-## 📌 نکات مهم
+## Docker
 
-- تمام جریان‌ها واقعی هستند (فراخوانی پنل، به‌روزرسانی دیتابیس، کمیسیون، QR، کرون و ...).
-- گروه تاپیک پشتیبانی می‌شود (گزارش‌ها به تاپیک‌های جدا می‌روند).
-- برای اتصال واقعی نیاز به پنل واقعی (Marzban و ...) دارید.
-- پروژه کاملاً مستقل و حرفه‌ای است.
+```bash
+cp .env.example .env
+nano .env
+docker compose up -d
+docker compose logs -f
+```
 
-**ZendanBOT** — قدرت، امنیت و سادگی در یک پلتفرم.
+No ports are published. SQLite database is stored in `./zendanbot.db`.
 
-فایل zip پروژه (نسخه خالص بات): ZendanBOT_Pure_Bot.zip
+---
 
-برای هرگونه گسترش یا پشتیبانی، با خیال راحت اقدام کنید.
+## Run as a systemd service (manual)
+
+```ini
+# /etc/systemd/system/zendanbot.service
+[Unit]
+Description=ZendanBot Telegram bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/ZendanBot
+EnvironmentFile=/opt/ZendanBot/.env
+ExecStart=/opt/ZendanBot/venv/bin/python /opt/ZendanBot/main.py
+Restart=always
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now zendanbot
+sudo systemctl status zendanbot
+journalctl -u zendanbot -f
+```
+
+---
+
+## Configuration
+
+Only three values are required in `.env`:
+
+| Variable       | Source                                    |
+| -------------- | ----------------------------------------- |
+| `BOT_TOKEN`    | [@BotFather](https://t.me/BotFather)      |
+| `ADMIN_ID`    | [@userinfobot](https://t.me/userinfobot)   |
+| `BOT_USERNAME` | your bot's username without `@`           |
+
+Optional:
+
+| Variable       | Default                                       |
+| -------------- | --------------------------------------------- |
+| `DATABASE_URL` | `sqlite+aiosqlite:///./zendanbot.db`          |
+| `DEBUG`        | `false`                                        |
+| `SECRET_KEY`   | auto-generated by the installer                |
+
+`DOMAIN` and `WEBHOOK_URL` must stay empty — this build is polling-only.
+
+To switch to PostgreSQL:
+
+```env
+DATABASE_URL=postgresql+asyncpg://user:pass@localhost/zendanbot
+```
+
+---
+
+## Troubleshooting
+
+| Error                                           | Fix                                                                   |
+| ----------------------------------------------- | --------------------------------------------------------------------- |
+| `BOT_TOKEN is empty or invalid`                 | Edit `.env` and put a real token (format `123456:AAH-...`).           |
+| `Cannot reach Telegram ... Unauthorized`        | Token is wrong or revoked. Generate a new one in @BotFather.          |
+| `Cannot reach Telegram` (timeout / SSL error)   | Server has an Iran IP; Telegram is blocked. Use a non-Iran VPS.       |
+| `Database init failed`                          | Wrong permissions on the working directory.                            |
+| Bot starts but never replies                    | A webhook was previously set; `main.py` clears it on startup.          |
+
+---
+
+## Project layout
+
+```
+ZendanBot/
+├── main.py                  entry point (aiogram, long polling)
+├── main_ptb.py              alternative entry point (python-telegram-bot)
+├── setup.sh                 one-shot installer
+├── requirements.txt
+├── .env.example
+├── Dockerfile
+├── docker-compose.yml
+└── app/
+    ├── config.py            settings via pydantic
+    ├── database.py          SQLAlchemy async engine
+    ├── security.py          rate limit, sanitization, admin checks
+    ├── topics.py            topic-group routing
+    ├── models.py            database models
+    ├── bot/
+    │   ├── handlers.py      main bot handlers
+    │   ├── advanced.py      extra features
+    │   └── keyboards.py
+    ├── cron/
+    │   ├── automation.py    notifications, auto-remove, uptime, backup
+    │   └── notifications.py
+    ├── panels/              11 panel integrations
+    ├── payments/            9+ payment gateways
+    └── utils/
+        └── qr_generator.py
+```
+
+---
+
+## Entry points
+
+- `main.py` — full feature set, uses `aiogram`.
+- `main_ptb.py` — minimal subset (`/start`, main menu, products list, wallet,
+  tariffs, support, tutorial, referral, admin stats) using `python-telegram-bot`.
+  Same database and models. Install the extra dependency first:
+
+  ```bash
+  pip install "python-telegram-bot[ext]>=21"
+  python main_ptb.py
+  ```
+
+  Only one of the two entry points can run at the same time against the same
+  bot token.
+
+---
+
+## License
+
+See [LICENSE](LICENSE).
