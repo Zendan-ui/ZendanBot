@@ -6,6 +6,7 @@ Professional async implementation.
 import aiohttp
 import hashlib
 import hmac
+import json
 from typing import Dict, Any, Optional
 
 class NowPayment:

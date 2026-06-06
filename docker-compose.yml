@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  zendanbot:
+    build: .
+    container_name: zendanbot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./zendanbot.db:/app/zendanbot.db
+      - ./backups:/app/backups
+    ports:
+      - "8000:8000"
+
+  # PostgreSQL for production (optional)
+  # Uncomment below if using PostgreSQL
+  # postgres:
+  #   image: postgres:16-alpine
+  #   container_name: zendanbot-db
+  #   restart: unless-stopped
+  #   environment:
+  #     POSTGRES_USER: zendanbot
+  #     POSTGRES_PASSWORD: changeme_strong_password
+  #     POSTGRES_DB: zendanbot
+  #   volumes:
+  #     - pgdata:/var/lib/postgresql/data
+
+# volumes:
+#   pgdata:

@@ -8,7 +8,7 @@ from app.bot.keyboards import (
     products_keyboard, panels_keyboard, confirm_keyboard
 )
 from app.database import async_session
-from app.models import User, Setting, Product, MarzbanPanel, Invoice, PaySetting, SupportMessage
+from app.models import User, Setting, Product, MarzbanPanel, Invoice, PaySetting, SupportMessage, Discount, Help, Admin, FAQ, ServiceRating, ServiceTransfer, OperationQueue, UserLimit, PaymentLock, AutoReceipt, ExtendThreshold, WelcomeGift
 from sqlalchemy.future import select
 from app.config import settings
 from app.security import (
@@ -19,10 +19,18 @@ from app.panels.marzban import MarzbanAPI
 from app.panels.xui import XUIPanel
 from app.panels.alireza import AlirezaPanel
 from app.panels.hiddify import HiddifyPanel
+from app.panels.sui import SUIPanel
+from app.panels.wireguard import WGDashboardPanel
+from app.panels.mikrotik import MikrotikPanel
+from app.panels.remnawave import RemnawavePanel
+from app.panels.eylan import EylanPanel
+from app.panels.pasargad import PasargadPanel
+from app.panels.marzneshin import MarzneshinPanel
 from app.topics import get_topic_id, send_to_topic
 import logging
-from datetime import datetime, timedelta
+import random
 import json
+from datetime import datetime, timedelta
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -42,12 +50,18 @@ class UserStates(StatesGroup):
     extending = State()
     viewing_services = State()
     service_action = State()
+    bulk_buy = State()
 
 # ==================== STAGE 1: CORE USER FLOWS (Purchase, Services, Test, Extend, Wallet) ====================
 
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
     user_id = str(message.from_user.id)
+    args = message.text.split()
+    referral_code = None
+    if len(args) > 1:
+        referral_code = sanitize_text(args[1])
+
     if not bot_rate_limiter.is_allowed(user_id):
         await message.answer("⏳ لطفاً کمی صبر کنید و دوباره تلاش کنید.")
         return
@@ -69,9 +83,22 @@ async def cmd_start(message: Message, state: FSMContext):
                 User_Status="active",
                 register=str(int(datetime.now().timestamp())),
                 limit_usertest=1,
+                codeInvitation=referral_code,
             )
             session.add(new_user)
             await session.commit()
+
+            # Affiliate welcome gift logic (Stage 2)
+            if referral_code and referral_code != user_id:
+                referrer = (await session.execute(select(User).where(User.id == referral_code))).scalar_one_or_none()
+                if referrer:
+                    gift = 5000  # Default, can be from DB
+                    referrer.Balance += gift
+                    await session.commit()
+                    try:
+                        await message.bot.send_message(int(referrer.id), f"🎁 هدیه زیرمجموعه جدید: {gift} تومان به کیف پول شما اضافه شد.")
+                    except:
+                        pass
             await message.answer(
                 f"🎉 <b>خوش آمدید به {settings.BOT_FULL_NAME}</b>\n\n"
                 "به پلتفرم حرفه‌ای و امن فروش سرویس VPN خوش آمدید.\n"
@@ -303,26 +330,29 @@ async def get_config(callback: CallbackQuery):
                 except Exception as e:
                     logger.error(f"Panel get error: {e}")
 
-            # Generate and send real QR code (Stage 4 complete, real implementation)
-            import qrcode
-            import io
+            # Generate and send real QR code (Professional styled)
+            from app.utils.qr_generator import generate_professional_qr
             from aiogram.types import BufferedInputFile
 
-            qr = qrcode.QRCode(version=1, box_size=10, border=5)
-            qr.add_data(sub_url)
-            qr.make(fit=True)
-            img = qr.make_image(fill_color="black", back_color="white")
-
-            buf = io.BytesIO()
-            img.save(buf, format='PNG')
-            buf.seek(0)
+            qr_bytes = generate_professional_qr(
+                data=sub_url,
+                style="rounded",
+                card_title="🔰 ZendanBOT",
+                card_subtitle=f"Subscription: {inv.username}",
+                card_footer=f"Volume: {inv.Volume} GB  |  Time: {inv.Service_time} Days\nScan to connect",
+                fg_color=(80, 60, 200),
+                bg_color=(255, 255, 255),
+                accent_color=(120, 80, 255),
+                card_bg_color=(18, 18, 40),
+                card_border_color=(100, 80, 220),
+            )
 
             await callback.message.answer_photo(
-                BufferedInputFile(buf.getvalue(), filename="config_qr.png"),
+                BufferedInputFile(qr_bytes, filename="qr_config.png"),
                 caption=f"🔰 <b>کانفیگ شما:</b>\n\n"
                         f"نام کاربری: <code>{inv.username}</code>\n"
                         f"لینک اشتراک: <code>{sub_url}</code>\n\n"
-                        "اسکن کنید یا لینک را کپی کنید.",
+                        "📱 اسکن کنید یا لینک را کپی کنید.",
                 parse_mode="HTML"
             )
         else:
@@ -380,64 +410,6 @@ async def admin_panel_cmd(message: Message):
 # Next stages will add affiliates, wheel, full admin tools, crons, web panel, etc.
 
 # ==================== STAGE 2: Affiliates, Wheel/Lottery, Support, Help, Verification, Channel Join ====================
-
-# Enhance start for referral (affiliates)
-@router.message(CommandStart())
-async def cmd_start_with_referral(message: Message, state: FSMContext):
-    user_id = str(message.from_user.id)
-    args = message.text.split()
-    referral_code = None
-    if len(args) > 1:
-        referral_code = sanitize_text(args[1])
-
-    if not bot_rate_limiter.is_allowed(user_id):
-        await message.answer("⏳ لطفاً کمی صبر کنید.")
-        return
-
-    async with async_session() as session:
-        user = (await session.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
-        
-        if not user:
-            new_user = User(
-                id=user_id,
-                username=sanitize_text(message.from_user.username or "none"),
-                Balance=0,
-                step="",
-                lang="fa",
-                agent="f",
-                User_Status="active",
-                register=str(int(datetime.now().timestamp())),
-                limit_usertest=1,
-                codeInvitation=referral_code,
-            )
-            session.add(new_user)
-            await session.commit()
-
-            # Affiliate welcome gift logic (Stage 2)
-            if referral_code and referral_code != user_id:
-                referrer = (await session.execute(select(User).where(User.id == referral_code))).scalar_one_or_none()
-                if referrer:
-                    # Add gift to referrer (from settings)
-                    gift = 5000  # Default, can be from DB
-                    referrer.Balance += gift
-                    await session.commit()
-                    await message.bot.send_message(referrer.id, f"🎁 هدیه زیرمجموعه جدید: {gift} تومان به کیف پول شما اضافه شد.")
-
-            await message.answer(
-                f"🎉 <b>خوش آمدید به {settings.BOT_FULL_NAME}</b>\n\n"
-                "به پلتفرم حرفه‌ای و امن فروش سرویس VPN خوش آمدید.\n\n"
-                "از منوی زیر شروع کنید:",
-                reply_markup=main_menu(),
-                parse_mode="HTML"
-            )
-        else:
-            await message.answer(
-                f"👋 دوباره خوش آمدید، {message.from_user.first_name}!\n\n"
-                f"موجودی شما: <b>{user.Balance}</b> تومان",
-                reply_markup=main_menu()
-            )
-    
-    await state.set_state(UserStates.main)
 
 # Channel join check (basic enforcement - Stage 2)
 async def check_channel_membership(bot, user_id: str, channels: list) -> bool:

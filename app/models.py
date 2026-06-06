@@ -212,13 +212,145 @@ class Admin(Base):
     added_by = Column(String(500), nullable=True)
     added_at = Column(String(100), default="")
 
-# Continue with other tables like channels, PaySetting, DiscountSell, affiliates, shopSetting, etc.
-# This is a partial implementation; full conversion would include all ~30 tables.
+# ---- Advanced models from Mirza-level features ----
 
 class PaySetting(Base):
     __tablename__ = "PaySetting"
     NamePay = Column(String(500), primary_key=True)
     ValuePay = Column(Text, nullable=False)
+
+class NotificationLog(Base):
+    """Track notifications sent to users (volume/time warnings, marketing, etc.)"""
+    __tablename__ = "notification_log"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(200), nullable=True)
+    type = Column(String(100), nullable=True)  # volume_warn, time_warn, marketing, system
+    message = Column(Text, nullable=True)
+    sent_at = Column(String(100), nullable=True)
+    status = Column(String(50), default="sent")
+
+class FAQ(Base):
+    """Frequently Asked Questions"""
+    __tablename__ = "faq"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    question = Column(String(2000), nullable=True)
+    answer = Column(Text, nullable=True)
+    order_num = Column(Integer, default=0)
+
+class UserRule(Base):
+    """Custom rules/terms that users must accept before using the bot"""
+    __tablename__ = "user_rule"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    text = Column(Text, nullable=True)
+    is_active = Column(String(20), default="1")
+
+class WelcomeGift(Base):
+    """Welcome gift configuration for new users"""
+    __tablename__ = "welcome_gift"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    gift_type = Column(String(100), default="balance")  # balance, volume, time, score
+    amount = Column(String(200), default="0")
+    is_active = Column(String(20), default="0")
+
+class ServiceTransfer(Base):
+    """Track service transfers between users"""
+    __tablename__ = "service_transfer"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    invoice_id = Column(String(200), nullable=True)
+    from_user = Column(String(200), nullable=True)
+    to_user = Column(String(200), nullable=True)
+    transfer_time = Column(String(100), nullable=True)
+    status = Column(String(50), default="completed")
+
+class ServiceRating(Base):
+    """User ratings for services"""
+    __tablename__ = "service_rating"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(200), nullable=True)
+    invoice_id = Column(String(200), nullable=True)
+    rating = Column(Integer, default=0)  # 1-5 stars
+    comment = Column(Text, nullable=True)
+    rated_at = Column(String(100), nullable=True)
+
+class OperationQueue(Base):
+    """Queue for incomplete operations (e.g., when server is down)"""
+    __tablename__ = "operation_queue"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    operation = Column(String(100), nullable=True)  # create, extend, add_volume, remove, etc.
+    data = Column(Text, nullable=True)  # JSON encoded data
+    status = Column(String(50), default="pending")  # pending, processing, done, failed
+    panel_id = Column(Integer, nullable=True)
+    created_at = Column(String(100), nullable=True)
+    retry_count = Column(Integer, default=0)
+
+class PanelNode(Base):
+    """Panel nodes/servers for multi-node support"""
+    __tablename__ = "panel_node"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    panel_id = Column(Integer, nullable=True)
+    name = Column(String(500), nullable=True)
+    address = Column(String(1000), nullable=True)
+    status = Column(String(100), default="active")
+    last_check = Column(String(100), nullable=True)
+
+class UserLimit(Base):
+    """Per-product user limits (how many times user can buy a specific product)"""
+    __tablename__ = "user_limit"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(200), nullable=True)
+    product_id = Column(Integer, nullable=True)
+    limit_count = Column(Integer, default=1)
+    used_count = Column(Integer, default=0)
+
+class PaymentLock(Base):
+    """Payment gateway lock - show gateway only after X successful payments"""
+    __tablename__ = "payment_lock"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(200), nullable=True)
+    gateway_name = Column(String(200), nullable=True)
+    required_success_count = Column(Integer, default=3)
+    success_count = Column(Integer, default=0)
+    is_locked = Column(String(20), default="1")
+
+class CashbackSetting(Base):
+    """Cashback settings per payment gateway"""
+    __tablename__ = "cashback_setting"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    gateway_name = Column(String(200), primary_key=True)
+    percent = Column(String(20), default="0")
+    is_active = Column(String(20), default="0")
+
+class AutoReceipt(Base):
+    """Auto-receipt verification records"""
+    __tablename__ = "auto_receipt"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(200), nullable=True)
+    amount = Column(String(200), nullable=True)
+    photo_id = Column(String(1000), nullable=True)
+    status = Column(String(100), default="pending")  # pending, approved, rejected
+    verified_by = Column(String(200), default="auto")
+    created_at = Column(String(100), nullable=True)
+    verified_at = Column(String(100), nullable=True)
+
+class ExtendThreshold(Base):
+    """Extend threshold settings per product (prevent early extension)"""
+    __tablename__ = "extend_threshold"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    product_id = Column(Integer, nullable=True)
+    min_days_remaining = Column(Integer, default=3)  # Can extend only when less than X days left
+    is_active = Column(String(20), default="0")
+
+class NightlyReport(Base):
+    """Nightly report data"""
+    __tablename__ = "nightly_report"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    report_date = Column(String(100), nullable=True)
+    total_users = Column(Integer, default=0)
+    active_users = Column(Integer, default=0)
+    total_sales = Column(Integer, default=0)
+    total_revenue = Column(String(200), default="0")
+    best_hour = Column(String(50), nullable=True)
+    change_rate = Column(String(50), default="0%")
 
 class Channels(Base):
     __tablename__ = "channels"
@@ -317,6 +449,7 @@ class SupportMessage(Base):
 # Function to initialize default settings (similar to table.php)
 async def init_default_settings():
     from sqlalchemy.future import select
+    from app.database import async_session
     async with async_session() as session:
         # Setting table
         result = await session.execute(select(Setting).limit(1))
@@ -330,8 +463,23 @@ async def init_default_settings():
         pay_defaults = [
             ("Cartstatus", "oncard"), ("nowpaymentstatus", "offnowpayment"),
             ("statusaqayepardakht", "offaqayepardakht"), ("zarinpalstatus", "offzarinpal"),
+            ("plisioStatus", "offplisio"), ("rialGatewayStatus", "offrialgateway"),
+            ("customGatewayStatus", "offcustomgateway"), ("starsStatus", "offstars"),
+            ("tronStatus", "offtron"),
             ("minbalance", "20000"), ("maxbalance", "1000000"),
-            # ... add more as needed
+            ("cashback_card", "0"), ("cashback_nowpayment", "0"),
+            ("cashback_zarinpal", "0"), ("cashback_plisio", "0"),
+            ("welcome_gift_active", "0"), ("welcome_gift_amount", "5000"),
+            ("welcome_gift_type", "balance"),
+            ("rules_text", ""), ("rules_active", "0"),
+            ("faq_active", "0"), ("rating_active", "1"),
+            ("transfer_active", "1"), ("change_location_limit", "3"),
+            ("auto_receipt_active", "0"),
+            ("gateway_lock_count", "0"),
+            ("extend_threshold_days", "3"),
+            ("score_per_purchase", "10"), ("score_per_referral", "5"),
+            ("notify_inactive_days", "7"),
+            ("max_test_per_user", "1"), ("max_test_total", "0"),
         ]
         for name, value in pay_defaults:
             exists = await session.execute(select(PaySetting).where(PaySetting.NamePay == name))

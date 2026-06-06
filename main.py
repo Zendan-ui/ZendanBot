@@ -5,9 +5,10 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from contextlib import asynccontextmanager
 
 from app.config import settings
-from app.database import init_db, init_default_settings
+from app.database import init_db
+from app.models import init_default_settings
 from app.bot.handlers import router as bot_router
-from app.security import *
+from app.bot.advanced import router as advanced_router
 from app.topics import init_default_topics
 from app.cron.automation import start_all_crons
 
@@ -19,6 +20,7 @@ logger = logging.getLogger(__name__)
 bot = Bot(token=settings.BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 dp.include_router(bot_router)
+dp.include_router(advanced_router)
 
 async def main():
     logger.info(f"🚀 Starting {settings.BOT_FULL_NAME} v{settings.VERSION}")
