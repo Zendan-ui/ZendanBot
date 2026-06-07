@@ -31,10 +31,9 @@ jobs:
         pip install flake8
         flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
 
-    - name: Smoke test (imports, DB init, router wiring)
-      env:
-        BOT_TOKEN: "123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-        ADMIN_ID: "1"
-        BOT_USERNAME: "testbot"
-        DEBUG: "false"
-      run: python tests/smoke_test.py
+- name: Smoke test (imports, DB init, router wiring)
+  env:
+    BOT_TOKEN: "123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    BOT_USERNAME: "testbot"
+    DEBUG: "false"
+  run: python tests/smoke_test.py
