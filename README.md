@@ -1,193 +1,230 @@
-# ZendanBot
+# ZendanBot 🤖
 
-Professional VPN sales and management bot for Telegram with support for
-11 panels (Marzban, XUI / 3X-UI, Hiddify, Alireza, SUI, WireGuard,
-MikroTik, Remnawave, Eylan, Pasargad, Marzneshin) and 9+ payment gateways
-(Zarinpal, AqayePardakht, NowPayment, Plisio, TRON, Telegram Stars,
-card-to-card, custom).
+ربات تلگرامی فروش و مدیریت سرویس (VPN) به زبان پایتون با **aiogram 3**.  
+حالت اجرا: **long-polling** — بدون نیاز به دامنه، SSL یا وبهوک.
 
-Runs in long-polling mode. No domain, no Nginx, no SSL, no webhook required.
+> این نسخه بازنویسی‌شده و **واقعاً کارکننده** است. تمام دکمه‌ها پاسخ می‌دهند،
+> خرید واقعی روی پنل **3X-UI / XUI** انجام می‌شود، و پرداخت **کارت‌به‌کارت با تایید
+> ادمین** پیاده‌سازی شده است.
 
 ---
 
-## Quick install (recommended)
+## امکانات
+
+**کاربر**
+- 🛍 خرید سرویس (دسته‌بندی ← پلن ← انتخاب موقعیت ← پرداخت از کیف پول ← دریافت لینک)
+- 🧩 سرویس دلخواه (انتخاب حجم/مدت توسط کاربر و قیمت‌گذاری خودکار)
+- 📦 سرویس‌های من: دریافت لینک، مشاهده مصرف، **تمدید**، **تغییر لینک**، روشن/خاموش روی پنل
+- 🎁 اکانت تست (با سقف قابل تنظیم برای هر کاربر)
+- 💰 کیف پول + شارژ کارت‌به‌کارت با ارسال عکس رسید و تایید ادمین
+- 🎟 کد هدیه (افزایش موجودی) و 🎁 کد تخفیف هنگام خرید (با محدودیت تعداد/خرید اول)
+- 👥 زیرمجموعه‌گیری با هدیه خودکار
+- 🤝 درخواست **نمایندگی** (با تخفیف اختصاصی روی همه خریدها بعد از تایید) — `/agent`
+- 💳 شارژ کیف پول با **درگاه آنلاین**: زرین‌پال، آقای‌پرداخت، NowPayments (کریپتو)
+- 🎲 گردونه شانس
+- 📢 عضویت اجباری در کانال (اختیاری، با بررسی واقعی عضویت)
+- 🎁 **انتقال سرویس** به کاربر دیگر
+- 🌐 **چندزبانه** (فارسی / English)
+- ⏰ یادآوری خودکار قبل از انقضای سرویس
+- ☎️ پشتیبانی (تیکت) و پاسخ ادمین
+- 📚 آموزش و 📜 قوانین
+
+**ادمین** (`/panel`)
+- 📊 آمار
+- 🖥 مدیریت پنل‌ها (افزودن/حذف/تست اتصال 3X-UI)
+- 🛍 مدیریت محصولات و 🗂 دسته‌بندی‌ها
+- 🎁 کدهای تخفیف و 🎟 کدهای هدیه
+- 💳 تایید/رد رسیدها و 🤝 تایید/رد درخواست‌های نمایندگی
+- 👤 مدیریت کاربر (شارژ دستی، مسدودسازی)
+- 📨 پیام همگانی
+- ⚙️ تنظیمات (شماره کارت، درگاه‌های آنلاین، عضویت اجباری، سرویس دلخواه، گزارش‌ها، کرون و ...)
+
+- 🖥 پشتیبانی از **چند نوع پنل هم‌زمان**: 3X-UI، **Marzban** و **Pasargad**
+- 📲 **QR کد حرفه‌ای** برای هر کانفیگ (کارت برند شده با ماژول‌های گرد)
+- 📈 **نمودار فروش ۷ روز** (تصویری، در پنل شیشه‌ای → آمار → نمودار)
+- 🗄 بکاپ خودکار دیتابیس به ادمین (`/backup` یا روزانه)
+- 🎟 ساخت **انبوه کارت شارژ** (`/gengift`)
+- 📈 آمار پیشرفته (فروش ۲۴ساعت/۷روز، کاربران جدید، نمایندگان، ...)
+
+**اتوماسیون (کرون)**
+- ⏰ یادآوری انقضا (هر ساعت)، علامت‌گذاری/حذف سرویس‌های منقضی، 🌙 گزارش شبانه به گروه
+- 🗄 بکاپ روزانه (۴ صبح UTC، در صورت فعال بودن `auto_backup`)
+- 📋 ارسال گزارش‌ها به **تاپیک‌های گروه** (خرید/پرداخت/پشتیبانی/نمایندگی/شبانه)
+
+---
+
+## نصب سریع (پیشنهادی)
 
 ```bash
 wget https://raw.githubusercontent.com/Zendan-ui/ZendanBot/main/setup.sh
 sudo bash setup.sh
 ```
 
-The installer will:
+اسکریپت پایتون و گیت را نصب می‌کند، سورس را در `/opt/ZendanBot` قرار می‌دهد،
+محیط مجازی می‌سازد، `.env` را می‌گیرد و سرویس `systemd` را راه‌اندازی می‌کند.
 
-1. install Python 3.10+, git, build tools
-2. clone the repo to `/opt/ZendanBot`
-3. create a virtualenv and install dependencies
-4. ask for `BOT_TOKEN`, `ADMIN_ID`, `BOT_USERNAME` and write `.env`
-5. verify the token against the Telegram API
-6. create and start a `zendanbot` systemd service
-
-Then open Telegram and send `/start` to your bot.
-
----
-
-## Manual install
+## نصب دستی
 
 ```bash
 git clone https://github.com/Zendan-ui/ZendanBot.git
 cd ZendanBot
 python3 -m venv venv
 source venv/bin/activate
-pip install -U pip
 pip install -r requirements.txt
 cp .env.example .env
-nano .env          # fill BOT_TOKEN, ADMIN_ID, BOT_USERNAME
+nano .env          # BOT_TOKEN و ADMIN_ID و BOT_USERNAME را پر کنید
 python main.py
 ```
 
-Expected output:
-
-```
-Starting ZendanBOT v2.0.0
-Logged in as @YourBot (id=...)
-Old webhook (if any) removed
-Bot is running in long-polling mode.
-```
-
----
-
-## Docker
+## اجرا با Docker
 
 ```bash
-cp .env.example .env
-nano .env
-docker compose up -d
-docker compose logs -f
+cp .env.example .env   # مقادیر را پر کنید
+docker compose up -d --build
 ```
-
-No ports are published. SQLite database is stored in `./zendanbot.db`.
 
 ---
 
-## Run as a systemd service (manual)
+## پنل مدیریت (دو حالت)
 
-```ini
-# /etc/systemd/system/zendanbot.service
-[Unit]
-Description=ZendanBot Telegram bot
-After=network-online.target
-Wants=network-online.target
+ربات دو پنل مدیریت دارد، هر دو فقط برای ادمین:
 
-[Service]
-Type=simple
-WorkingDirectory=/opt/ZendanBot
-EnvironmentFile=/opt/ZendanBot/.env
-ExecStart=/opt/ZendanBot/venv/bin/python /opt/ZendanBot/main.py
-Restart=always
-RestartSec=5
-User=root
+| دستور | نوع | کاربرد |
+|------|-----|--------|
+| `/panel` | کیبوردی (دکمه‌های پایین صفحه) + دستورات | سریع برای فرم‌ها و دستورات |
+| `/admin` | 🪟 **شیشه‌ای / inline** (همه‌چیز با کلیک) | راحت‌ترین حالت؛ پنل‌ها، محصولات، تنظیمات، رسیدها و... همه دکمه‌ای |
 
-[Install]
-WantedBy=multi-user.target
-```
+در پنل شیشه‌ای می‌توانید با یک کلیک: آمار ببینید، پنل/محصول را فعال/غیرفعال یا حذف
+کنید، رسیدها و نمایندگی‌ها را تایید/رد کنید، تنظیمات را روشن/خاموش کنید، بکاپ
+بگیرید و دیتابیس را ریست کنید.
+
+## ریست برای تست
 
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now zendanbot
-sudo systemctl status zendanbot
-journalctl -u zendanbot -f
+bash reset.sh          # فقط پاک کردن دیتابیس‌ها (شروع تمیز)
+bash reset.sh test     # ریست + اجرای کامل تست‌ها
 ```
+داخل خود ربات هم: `/resetdb` یا دکمه «🧹 ریست دیتابیس» در پنل شیشه‌ای.
 
----
+## شروع به کار (بعد از اجرا)
 
-## Configuration
+1. در تلگرام به ربات `/start` بدهید.
+2. به‌عنوان ادمین `/admin` (پنل شیشه‌ای) یا `/panel` (کیبوردی) بزنید.
+3. در «⚙️ تنظیمات»، **شماره کارت** و **نام صاحب کارت** را تنظیم کنید:
+   ```
+   /set card_number 6037-9911-1234-5678
+   /set card_holder نام صاحب حساب
+   ```
+4. یک **پنل** اضافه کنید (از «🖥 مدیریت پنل‌ها»):
+   ```
+   # 3X-UI
+   /addpanel xui|آلمان|http://1.2.3.4:54321|admin|admin|1|sub.site.com:2096
+   # Marzban
+   /addpanel marzban|فرانسه|https://panel.site.com|admin|pass
+   ```
+   ساختار: `نوع | نام | آدرس‌پنل | یوزرنیم | پسورد | inbound_id | دامنه‌ساب`
+5. (اختیاری) یک **دسته‌بندی** بسازید: `/addcat پرفروش‌ها`
+6. یک **محصول** بسازید:
+   ```
+   /addproduct یک‌ماهه ۵۰گیگ|50|30|85000
+   ```
+   ساختار: `نام | حجم(گیگ، ۰=نامحدود) | روز | قیمت(تومان) | panel_id | category_id`
 
-Only three values are required in `.env`:
+حالا کاربران می‌توانند کیف پول را شارژ کنند (کارت‌به‌کارت)، رسید بفرستند،
+بعد از تایید شما خرید کنند و لینک کانفیگ بگیرند.
 
-| Variable       | Source                                    |
-| -------------- | ----------------------------------------- |
-| `BOT_TOKEN`    | [@BotFather](https://t.me/BotFather)      |
-| `ADMIN_ID`    | [@userinfobot](https://t.me/userinfobot)   |
-| `BOT_USERNAME` | your bot's username without `@`           |
+### دستورات مفید ادمین
 
-Optional:
+| کار | دستور |
+|-----|-------|
+| افزودن پنل | `/addpanel نام|url|user|pass|inbound|sub` |
+| افزودن محصول | `/addproduct نام|حجم|روز|قیمت|panel_id|cat_id` |
+| دسته‌بندی | `/addcat نام` ، `/delcat id` |
+| کد تخفیف | `/adddisc کد|درصد|تعداد|first` ، `/deldisc کد` |
+| کد هدیه | `/addgift کد|مبلغ|تعداد` ، `/delgift کد` |
+| شارژ دستی کاربر | `/addbalance آیدی مبلغ` |
+| مسدود/آزاد | `/block آیدی` ، `/unblock آیدی` |
+| تغییر تنظیم | `/set کلید مقدار` |
+| پاسخ به تیکت | `/reply آیدی_تیکت متن` |
 
-| Variable       | Default                                       |
-| -------------- | --------------------------------------------- |
-| `DATABASE_URL` | `sqlite+aiosqlite:///./zendanbot.db`          |
-| `DEBUG`        | `false`                                        |
-| `SECRET_KEY`   | auto-generated by the installer                |
-
-`DOMAIN` and `WEBHOOK_URL` must stay empty — this build is polling-only.
-
-To switch to PostgreSQL:
-
-```env
-DATABASE_URL=postgresql+asyncpg://user:pass@localhost/zendanbot
-```
-
----
-
-## Troubleshooting
-
-| Error                                           | Fix                                                                   |
-| ----------------------------------------------- | --------------------------------------------------------------------- |
-| `BOT_TOKEN is empty or invalid`                 | Edit `.env` and put a real token (format `123456:AAH-...`).           |
-| `Cannot reach Telegram ... Unauthorized`        | Token is wrong or revoked. Generate a new one in @BotFather.          |
-| `Cannot reach Telegram` (timeout / SSL error)   | Server has an Iran IP; Telegram is blocked. Use a non-Iran VPS.       |
-| `Database init failed`                          | Wrong permissions on the working directory.                            |
-| Bot starts but never replies                    | A webhook was previously set; `main.py` clears it on startup.          |
-
----
-
-## Project layout
+### فعال‌سازی قابلیت‌های اختیاری
 
 ```
-ZendanBot/
-├── main.py                  entry point (aiogram, long polling)
-├── main_ptb.py              alternative entry point (python-telegram-bot)
-├── setup.sh                 one-shot installer
-├── requirements.txt
-├── .env.example
-├── Dockerfile
-├── docker-compose.yml
-└── app/
-    ├── config.py            settings via pydantic
-    ├── database.py          SQLAlchemy async engine
-    ├── security.py          rate limit, sanitization, admin checks
-    ├── topics.py            topic-group routing
-    ├── models.py            database models
-    ├── bot/
-    │   ├── handlers.py      main bot handlers
-    │   ├── advanced.py      extra features
-    │   └── keyboards.py
-    ├── cron/
-    │   ├── automation.py    notifications, auto-remove, uptime, backup
-    │   └── notifications.py
-    ├── panels/              11 panel integrations
-    ├── payments/            9+ payment gateways
-    └── utils/
-        └── qr_generator.py
+/set custom_enabled 1            # سرویس دلخواه
+/set join_enabled 1              # عضویت اجباری
+/set join_channels @ch1,@ch2     # کانال‌ها (ربات باید ادمین کانال باشد)
+
+# نمایندگی
+/set agent_enabled 1
+/set agent_default_discount 10
+
+# درگاه‌های آنلاین
+/set zarinpal_enabled 1
+/set zarinpal_merchant xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+/set aqayepardakht_enabled 1
+/set aqayepardakht_pin YOUR_PIN
+/set nowpayments_enabled 1
+/set nowpayments_api_key YOUR_KEY
+
+# گزارش‌ها به گروه (ربات را ادمین گروه کنید)
+/set report_chat_id -1001234567890
+# (اختیاری) تاپیک‌ها در گروه‌های Topic:
+/set topic_buy 12
+/set topic_payment 13
 ```
 
----
-
-## Entry points
-
-- `main.py` — full feature set, uses `aiogram`.
-- `main_ptb.py` — minimal subset (`/start`, main menu, products list, wallet,
-  tariffs, support, tutorial, referral, admin stats) using `python-telegram-bot`.
-  Same database and models. Install the extra dependency first:
-
-  ```bash
-  pip install "python-telegram-bot[ext]>=21"
-  python main_ptb.py
-  ```
-
-  Only one of the two entry points can run at the same time against the same
-  bot token.
+> نکته درباره‌ی درگاه‌های آنلاین: چون ربات فقط long-polling است (بدون وب‌سرور)،
+> کاربر بعد از پرداخت دکمه‌ی «✅ پرداخت کردم / بررسی» را می‌زند و ربات صحت
+> پرداخت را مستقیماً از API درگاه استعلام می‌کند و کیف پول را شارژ می‌کند.
 
 ---
 
-## License
+## تست
 
-See [LICENSE](LICENSE).
+بدون نیاز به توکن واقعی، تست آفلاین کامل (شبیه‌سازی آپدیت‌های تلگرام):
+
+```bash
+python tests/smoke_test.py
+```
+
+این تست خرید کامل، تایید رسید، گیر نکردن دکمه‌ها در حالت‌ها (state) و
+دسترسی ادمین را بررسی می‌کند.
+
+---
+
+## ساختار پروژه
+
+```
+main.py                 # نقطه شروع (polling)
+app/
+  config.py             # تنظیمات از .env
+  database.py           # اتصال async به دیتابیس
+  models.py             # جداول + تنظیمات کلید/مقدار
+  security.py           # ریت‌لیمیت، اعتبارسنجی، سنیتایز
+  services.py           # لایه ساخت سرویس روی پنل (انتخاب درایور بر اساس نوع پنل)
+  i18n.py               # چندزبانه (fa/en)
+  reports.py            # گزارش به گروه/تاپیک‌ها
+  gateways.py           # درگاه‌های آنلاین (زرین‌پال/آقای‌پرداخت/NowPayments)
+  cron.py               # اتوماسیون (یادآوری، حذف منقضی، گزارش شبانه، بکاپ)
+  panels/xui.py         # درایور واقعی 3X-UI / XUI
+  panels/marzban.py     # درایور واقعی Marzban
+  panels/pasargad.py    # درایور Pasargad (سازگار با Marzban)
+  qr.py                 # ساخت QR کد حرفه‌ای
+  chart.py              # نمودار فروش (Pillow)
+  bot/
+    keyboards.py        # کیبوردها (inline + reply)
+    states.py           # FSM states
+    handlers.py         # هندلرهای کاربر
+    admin.py            # پنل ادمین کیبوردی + دستورات
+    glass.py            # 🪟 پنل ادمین شیشه‌ای (inline)
+    fallback.py         # هندلر catch-all (هیچ دکمه‌ای بی‌پاسخ نمی‌ماند)
+tests/smoke_test.py     # تست آفلاین end-to-end
+```
+
+## افزودن پنل‌های جدید
+
+دو نوع پنل پشتیبانی می‌شوند: **xui** و **marzban**. برای افزودن نوع جدید
+کافی است یک درایور با همان رابط (`create_client` / `get_client_traffic` /
+`set_client_enabled` / `renew_client` / `change_link` / `delete_client`) مثل
+`app/panels/xui.py` بنویسید و در `app/services.py` تابع `get_driver` آن را
+بر اساس `panel.type` برگرداند.

@@ -1,542 +1,308 @@
-from sqlalchemy import Column, Integer, String, Text, Boolean, JSON, DateTime, Enum, BigInteger
-from sqlalchemy.sql import func
-from app.database import Base
-import json
+"""
+ZendanBot database models (clean, working core).
+
+This is a trimmed, fully-working schema that backs the rebuilt bot.
+Only the tables actually used by the bot are defined here so the whole
+project stays understandable and every button maps to real data.
+"""
 from datetime import datetime
 
-# Common table args to prevent redefinition errors
-EXTEND = {"extend_existing": True}
+from sqlalchemy import BigInteger, Boolean, Column, DateTime, Integer, String, Text
+from sqlalchemy.future import select
+from sqlalchemy.sql import func
+
+from app.database import Base, async_session
 
 
+# --------------------------------------------------------------------------- #
+#  Users
+# --------------------------------------------------------------------------- #
 class User(Base):
-    __tablename__ = "user"
-    __table_args__ = (EXTEND,)
-    id = Column(String(500), primary_key=True)
-    limit_usertest = Column(Integer, default=0)
-    roll_Status = Column(Boolean, default=True)
-    username = Column(String(500), default="none")
-    Processing_value = Column(Text, default="")
-    Processing_value_one = Column(Text, default="")
-    Processing_value_tow = Column(Text, default="")
-    Processing_value_four = Column(Text, default="")
-    step = Column(String(500), default="")
-    description_blocking = Column(Text, nullable=True)
-    number = Column(String(300), default="none")
-    Balance = Column(Integer, default=0)
-    User_Status = Column(String(500), default="")
-    pagenumber = Column(Integer, default=0)
-    message_count = Column(String(100), default="0")
-    last_message_time = Column(String(100), default="0")
-    agent = Column(String(100), default="f")
-    affiliatescount = Column(String(100), default="0")
-    affiliates = Column(String(100), default="0")
-    namecustom = Column(String(300), default="none")
-    number_username = Column(String(300), default="100")
-    register = Column(String(100), default="none")
-    verify = Column(String(100), default="1")
-    cardpayment = Column(String(100), default="1")
-    codeInvitation = Column(String(100), nullable=True)
-    pricediscount = Column(String(100), default="0")
-    hide_mini_app_instruction = Column(String(20), default="0")
-    maxbuyagent = Column(String(100), default="0")
-    joinchannel = Column(String(100), default="0")
-    checkstatus = Column(String(50), default="0")
-    bottype = Column(Text, nullable=True)
-    score = Column(Integer, default=0)
-    limitchangeloc = Column(String(50), default="0")
-    status_cron = Column(String(20), default="1")
-    expire = Column(String(100), nullable=True)
-    token = Column(String(100), nullable=True)
+    __tablename__ = "users"
+
+    id = Column(BigInteger, primary_key=True)            # telegram user id
+    username = Column(String(255), default="")
+    first_name = Column(String(255), default="")
+    balance = Column(Integer, default=0)                 # toman
+    is_blocked = Column(Boolean, default=False)
+    test_used = Column(Integer, default=0)               # how many test accounts taken
+    referrer_id = Column(BigInteger, nullable=True)
+    referrals_count = Column(Integer, default=0)
     lang = Column(String(5), default="fa")
-    ref_code = Column(String(100), nullable=True)
+    # agent / reseller
+    is_agent = Column(Boolean, default=False)
+    agent_discount = Column(Integer, default=0)          # % off all purchases for this agent
+    created_at = Column(DateTime, default=func.now())
 
 
-class Setting(Base):
-    __tablename__ = "setting"
-    __table_args__ = (EXTEND,)
+# --------------------------------------------------------------------------- #
+#  Panels (servers) — currently the bot drives 3X-UI / XUI panels
+# --------------------------------------------------------------------------- #
+class Panel(Base):
+    __tablename__ = "panels"
+
     id = Column(Integer, primary_key=True, autoincrement=True)
-    Bot_Status = Column(String(200), default="botstatuson")
-    roll_Status = Column(String(200), default="rolleon")
-    get_number = Column(String(200), default="offAuthenticationphone")
-    iran_number = Column(String(200), default="offAuthenticationiran")
-    NotUser = Column(String(200), default="offnotuser")
-    Channel_Report = Column(String(600), default="0")
-    limit_usertest_all = Column(String(600), default="1")
-    affiliatesstatus = Column(String(600), default="offaffiliates")
-    affiliatespercentage = Column(String(600), default="0")
-    removedayc = Column(String(600), default="0")
-    showcard = Column(String(200), default="1")
-    numbercount = Column(String(600), default="0")
-    statusnewuser = Column(String(600), default="onnewuser")
-    statusagentrequest = Column(String(600), default="onrequestagent")
-    statuscategory = Column(String(200), default="offcategory")
-    statusterffh = Column(String(200), default="")
-    volumewarn = Column(String(200), default="2")
-    inlinebtnmain = Column(String(200), default="offinline")
-    verifystart = Column(String(200), default="offverify")
-    id_support = Column(String(200), default="0")
-    statusnamecustom = Column(String(100), default="offnamecustom")
-    statuscategorygenral = Column(String(100), default="offcategorys")
-    statussupportpv = Column(String(100), default="offpvsupport")
-    agentreqprice = Column(String(100), default="0")
-    bulkbuy = Column(String(100), default="onbulk")
-    on_hold_day = Column(String(100), default="4")
-    cronvolumere = Column(String(100), default="5")
-    verifybucodeuser = Column(String(100), default="offverify")
-    scorestatus = Column(String(100), default="0")
-    Lottery_prize = Column(Text, default=json.dumps({'one': '0', 'tow': '0', 'theree': '0'}))
-    wheel_luck = Column(String(45), default="0")
-    wheel_luck_price = Column(String(45), default="0")
-    btn_status_extned = Column(String(45), default="0")
-    daywarn = Column(String(45), default="2")
-    categoryhelp = Column(String(45), default="0")
-    linkappstatus = Column(String(45), default="0")
-    wheelagent = Column(String(45), default="1")
-    Lotteryagent = Column(String(45), default="1")
-    statusfirstwheel = Column(String(45), default="1")
-    statuslimitchangeloc = Column(String(45), default="0")
-    Debtsettlement = Column(String(45), default="0")
-    Dice = Column(String(45), default="0")
-    keyboardmain = Column(Text, default='{"keyboard":[[{"text":"text_sell"},{"text":"text_extend"}],[{"text":"text_usertest"},{"text":"text_wheel_luck"}],[{"text":"text_Purchased_services"},{"text":"accountwallet"}],[{"text":"text_affiliates"},{"text":"text_Tariff_list"}],[{"text":"text_support"},{"text":"text_help"}]]}')
-    statusnoteforf = Column(String(45), default="0")
-    statuscopycart = Column(String(45), default="0")
-    timeauto_not_verify = Column(String(20), default="1")
-    status_keyboard_config = Column(String(20), default="0")
-    cron_status = Column(Text, default=json.dumps({'day': True, 'volume': True, 'remove': False, 'remove_volume': False, 'test': False, 'on_hold': False, 'uptime_node': False, 'uptime_panel': False}))
-    limitnumber = Column(String(200), default=json.dumps({'free': 100, 'all': 100}))
+    name = Column(String(255), nullable=False)           # shown to the user as location
+    type = Column(String(50), default="xui")             # xui / marzban / ...
+    url = Column(String(1000), nullable=False)           # e.g. http://1.2.3.4:54321
+    username = Column(String(255), nullable=False)
+    password = Column(String(255), nullable=False)
+    inbound_id = Column(Integer, default=1)              # which inbound to add clients to
+    sub_domain = Column(String(500), default="")         # domain:port for sub link (optional)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=func.now())
 
 
-class MarzbanPanel(Base):
-    __tablename__ = "marzban_panel"
-    __table_args__ = (EXTEND,)
+# --------------------------------------------------------------------------- #
+#  Products (plans)
+# --------------------------------------------------------------------------- #
+class Category(Base):
+    __tablename__ = "categories"
+
     id = Column(Integer, primary_key=True, autoincrement=True)
-    code_panel = Column(String(200), nullable=True)
-    name_panel = Column(String(2000), nullable=True)
-    status = Column(String(500), default="active")
-    url_panel = Column(String(2000), nullable=True)
-    username_panel = Column(String(200), nullable=True)
-    password_panel = Column(String(200), nullable=True)
-    agent = Column(String(200), default="all")
-    sublink = Column(String(500), default="onsublink")
-    config = Column(String(500), default="offconfig")
-    MethodUsername = Column(String(700), default="numericIdRandom")
-    TestAccount = Column(String(100), default="ONTestAccount")
-    limit_panel = Column(String(100), default="unlimted")
-    namecustom = Column(String(100), default="vpn")
-    Methodextend = Column(String(100), default="resetVolumeTime")
-    conecton = Column(String(100), default="offconecton")
-    linksubx = Column(String(1000), nullable=True)
-    inboundid = Column(String(100), default="1")
-    type = Column(String(100), default="marzban")
-    inboundstatus = Column(String(100), default="offinbounddisable")
-    inbound_deactive = Column(String(100), default="0")
-    time_usertest = Column(String(100), default="1")
-    val_usertest = Column(String(100), default="100")
-    secret_code = Column(String(200), nullable=True)
-    priceChangeloc = Column(String(200), default="0")
-    priceextravolume = Column(String(500), default=json.dumps({'f': '4000', 'n': '4000', 'n2': '4000'}))
-    pricecustomvolume = Column(String(500), default=json.dumps({'f': '4000', 'n': '4000', 'n2': '4000'}))
-    pricecustomtime = Column(String(500), default=json.dumps({'f': '4000', 'n': '4000', 'n2': '4000'}))
-    priceextratime = Column(String(500), default=json.dumps({'f': '4000', 'n': '4000', 'n2': '4000'}))
-    mainvolume = Column(String(500), default=json.dumps({'f': '1', 'n': '1', 'n2': '1'}))
-    maxvolume = Column(String(500), default=json.dumps({'f': '1000', 'n': '1000', 'n2': '1000'}))
-    maintime = Column(String(500), default=json.dumps({'f': '1', 'n': '1', 'n2': '1'}))
-    maxtime = Column(String(500), default=json.dumps({'f': '365', 'n': '365', 'n2': '365'}))
-    status_extend = Column(String(100), default="on_extend")
-    datelogin = Column(Text, nullable=True)
-    proxies = Column(Text, nullable=True)
-    inbounds = Column(Text, nullable=True)
-    subvip = Column(String(60), default="offsubvip")
-    changeloc = Column(String(60), default="offchangeloc")
-    on_hold_test = Column(String(60), default="1")
-    version_panel = Column(String(60), default="0")
-    customvolume = Column(Text, default=json.dumps({'f': '0', 'n': '0', 'n2': '0'}))
-    hide_user = Column(Text, nullable=True)
+    name = Column(String(255), nullable=False)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=func.now())
 
 
 class Product(Base):
-    __tablename__ = "product"
-    __table_args__ = (EXTEND,)
+    __tablename__ = "products"
+
     id = Column(Integer, primary_key=True, autoincrement=True)
-    code_product = Column(String(200), nullable=True)
-    name_product = Column(String(2000), nullable=True)
-    price_product = Column(String(2000), nullable=True)
-    Volume_constraint = Column(String(2000), nullable=True)
-    Location = Column(String(200), nullable=True)
-    Service_time = Column(String(200), nullable=True)
-    agent = Column(String(100), default="f")
-    note = Column(Text, default="")
-    data_limit_reset = Column(String(200), default="no_reset")
-    one_buy_status = Column(String(20), default="0")
-    inbounds = Column(Text, nullable=True)
-    proxies = Column(Text, nullable=True)
-    category = Column(String(400), nullable=True)
-    hide_panel = Column(Text, default="{}")
+    name = Column(String(255), nullable=False)
+    category_id = Column(Integer, nullable=True)         # optional grouping
+    volume_gb = Column(Integer, default=0)               # 0 = unlimited
+    days = Column(Integer, default=30)
+    price = Column(Integer, default=0)                   # toman
+    panel_id = Column(Integer, nullable=True)            # optional fixed panel
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=func.now())
 
 
-class Invoice(Base):
-    __tablename__ = "invoice"
-    __table_args__ = (EXTEND,)
-    id_invoice = Column(String(200), primary_key=True)
-    id_user = Column(String(200), nullable=True)
-    username = Column(String(300), nullable=True)
-    Service_location = Column(String(300), nullable=True)
-    time_sell = Column(String(200), nullable=True)
-    name_product = Column(String(200), nullable=True)
-    price_product = Column(String(200), nullable=True)
-    Volume = Column(String(200), nullable=True)
-    Service_time = Column(String(200), nullable=True)
-    uuid = Column(Text, nullable=True)
-    note = Column(String(700), nullable=True)
-    user_info = Column(Text, nullable=True)
-    bottype = Column(String(200), nullable=True)
-    refral = Column(String(100), nullable=True)
-    time_cron = Column(String(100), nullable=True)
-    notifctions = Column(Text, nullable=True)
-    Status = Column(String(200), nullable=True)
+# --------------------------------------------------------------------------- #
+#  Services (a delivered config / invoice)
+# --------------------------------------------------------------------------- #
+class Service(Base):
+    __tablename__ = "services"
 
-
-class PaymentReport(Base):
-    __tablename__ = "Payment_report"
-    __table_args__ = (EXTEND,)
     id = Column(Integer, primary_key=True, autoincrement=True)
-    id_user = Column(String(200), nullable=True)
-    id_order = Column(String(2000), nullable=True)
-    time = Column(String(200), nullable=True)
-    at_updated = Column(String(200), nullable=True)
-    price = Column(String(200), nullable=True)
-    dec_not_confirmed = Column(Text, nullable=True)
-    Payment_Method = Column(String(400), nullable=True)
-    payment_Status = Column(String(100), nullable=True)
-    bottype = Column(String(300), nullable=True)
-    message_id = Column(Integer, nullable=True)
-    id_invoice = Column(String(1000), nullable=True)
+    user_id = Column(BigInteger, nullable=False)
+    panel_id = Column(Integer, nullable=True)
+    product_name = Column(String(255), default="")
+    remark = Column(String(255), default="")             # username/email on the panel
+    sub_url = Column(String(1000), default="")
+    config_uuid = Column(String(255), default="")
+    volume_gb = Column(Integer, default=0)
+    days = Column(Integer, default=30)
+    price = Column(Integer, default=0)
+    status = Column(String(50), default="active")        # active / disabled / expired
+    expire_at = Column(DateTime, nullable=True)          # computed expiry for reminders
+    renew_count = Column(Integer, default=0)
+    created_at = Column(DateTime, default=func.now())
 
 
-class Admin(Base):
-    __tablename__ = "admin"
-    __table_args__ = (EXTEND,)
-    id_admin = Column(String(500), primary_key=True)
-    username = Column(String(1000), nullable=True)
-    password = Column(String(1000), nullable=True)
-    rule = Column(String(500), default="administrator")
-    permissions = Column(Text, default='{"all": true}')
-    added_by = Column(String(500), nullable=True)
-    added_at = Column(String(100), default="")
-
-
-class PaySetting(Base):
-    __tablename__ = "PaySetting"
-    __table_args__ = (EXTEND,)
-    NamePay = Column(String(500), primary_key=True)
-    ValuePay = Column(Text, nullable=False)
-
-
-class Channels(Base):
-    __tablename__ = "channels"
-    __table_args__ = (EXTEND,)
-    remark = Column(String(200), primary_key=True)
-    linkjoin = Column(String(200))
-    link = Column(String(200))
-
-
+# --------------------------------------------------------------------------- #
+#  Discount codes (apply at purchase) & gift codes (add balance)
+# --------------------------------------------------------------------------- #
 class Discount(Base):
-    __tablename__ = "Discount"
-    __table_args__ = (EXTEND,)
+    __tablename__ = "discounts"
+
     id = Column(Integer, primary_key=True, autoincrement=True)
-    code = Column(String(2000))
-    price = Column(String(200))
-    limituse = Column(String(200))
-    limitused = Column(String(200))
+    code = Column(String(100), nullable=False, unique=True)
+    percent = Column(Integer, default=0)                 # 0-100
+    max_uses = Column(Integer, default=0)                # 0 = unlimited
+    used = Column(Integer, default=0)
+    first_purchase_only = Column(Boolean, default=False)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=func.now())
 
 
-class DiscountSell(Base):
-    __tablename__ = "DiscountSell"
-    __table_args__ = (EXTEND,)
+class GiftCode(Base):
+    __tablename__ = "gift_codes"
+
     id = Column(Integer, primary_key=True, autoincrement=True)
-    codeDiscount = Column(String(1000))
-    price = Column(String(200))
-    limitDiscount = Column(String(500))
-    agent = Column(String(500))
-    usefirst = Column(String(100))
-    useuser = Column(String(100))
-    code_product = Column(String(100))
-    code_panel = Column(String(100))
-    time = Column(String(100))
-    type = Column(String(100))
-    usedDiscount = Column(String(500))
+    code = Column(String(100), nullable=False, unique=True)
+    amount = Column(Integer, default=0)                  # toman added to wallet
+    max_uses = Column(Integer, default=1)               # 0 = unlimited
+    used = Column(Integer, default=0)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=func.now())
 
 
-# FIX: Affiliates now has a proper primary key
-class Affiliates(Base):
-    __tablename__ = "affiliates"
-    __table_args__ = (EXTEND,)
+class GiftCodeUsed(Base):
+    __tablename__ = "gift_codes_used"
+
     id = Column(Integer, primary_key=True, autoincrement=True)
-    description = Column(Text)
-    status_commission = Column(String(200))
-    Discount = Column(String(200))
-    price_Discount = Column(String(200))
-    porsant_one_buy = Column(String(100))
-    id_media = Column(String(300))
+    code_id = Column(Integer, nullable=False)
+    user_id = Column(BigInteger, nullable=False)
+    created_at = Column(DateTime, default=func.now())
 
 
-class ShopSetting(Base):
-    __tablename__ = "shopSetting"
-    __table_args__ = (EXTEND,)
-    Namevalue = Column(String(500), primary_key=True)
-    value = Column(Text)
+# --------------------------------------------------------------------------- #
+#  Card-to-card payment receipts (admin approval flow)
+# --------------------------------------------------------------------------- #
+class Receipt(Base):
+    __tablename__ = "receipts"
 
-
-class Help(Base):
-    __tablename__ = "help"
-    __table_args__ = (EXTEND,)
     id = Column(Integer, primary_key=True, autoincrement=True)
-    name_os = Column(String(500))
-    Media_os = Column(String(5000))
-    type_Media_os = Column(String(500))
-    category = Column(Text)
-    Description_os = Column(Text)
+    user_id = Column(BigInteger, nullable=False)
+    amount = Column(Integer, default=0)
+    photo_file_id = Column(String(1000), default="")
+    status = Column(String(50), default="pending")       # pending / approved / rejected
+    admin_id = Column(BigInteger, nullable=True)
+    created_at = Column(DateTime, default=func.now())
+    handled_at = Column(DateTime, nullable=True)
 
 
-class TopicID(Base):
-    __tablename__ = "topicid"
-    __table_args__ = (EXTEND,)
-    report = Column(String(500), primary_key=True)
-    idreport = Column(Text)
+# --------------------------------------------------------------------------- #
+#  Support tickets
+# --------------------------------------------------------------------------- #
+class Ticket(Base):
+    __tablename__ = "tickets"
 
-
-class WheelList(Base):
-    __tablename__ = "wheel_list"
-    __table_args__ = (EXTEND,)
     id = Column(Integer, primary_key=True, autoincrement=True)
-    id_user = Column(String(200))
-    time = Column(String(200))
-    first_name = Column(String(200))
-    wheel_code = Column(String(200))
-    price = Column(String(200))
+    user_id = Column(BigInteger, nullable=False)
+    text = Column(Text, default="")
+    answer = Column(Text, default="")
+    status = Column(String(50), default="open")          # open / answered / closed
+    created_at = Column(DateTime, default=func.now())
 
 
-class Botsaz(Base):
-    __tablename__ = "botsaz"
-    __table_args__ = (EXTEND,)
+# --------------------------------------------------------------------------- #
+#  Agent (reseller) requests
+# --------------------------------------------------------------------------- #
+class AgentRequest(Base):
+    __tablename__ = "agent_requests"
+
     id = Column(Integer, primary_key=True, autoincrement=True)
-    id_user = Column(String(200))
-    bot_token = Column(String(200))
-    admin_ids = Column(Text)
-    username = Column(String(200))
-    setting = Column(Text)
-    hide_panel = Column(JSON, default={})
-    time = Column(String(200))
+    user_id = Column(BigInteger, nullable=False)
+    note = Column(Text, default="")
+    status = Column(String(50), default="pending")       # pending / approved / rejected
+    created_at = Column(DateTime, default=func.now())
 
 
-class Category(Base):
-    __tablename__ = "category"
-    __table_args__ = (EXTEND,)
+# --------------------------------------------------------------------------- #
+#  Online payment transactions (Zarinpal / AqayePardakht / NowPayments)
+# --------------------------------------------------------------------------- #
+class Payment(Base):
+    __tablename__ = "payments"
+
     id = Column(Integer, primary_key=True, autoincrement=True)
-    remark = Column(String(500))
+    user_id = Column(BigInteger, nullable=False)
+    gateway = Column(String(50), default="")             # zarinpal / aqayepardakht / nowpayments
+    amount = Column(Integer, default=0)                  # toman
+    authority = Column(String(255), default="")          # gateway-side id / authority / order id
+    ref_id = Column(String(255), default="")             # final reference after verify
+    status = Column(String(50), default="pending")       # pending / paid / failed
+    created_at = Column(DateTime, default=func.now())
+    paid_at = Column(DateTime, nullable=True)
 
 
-class SupportMessage(Base):
-    __tablename__ = "support_message"
-    __table_args__ = (EXTEND,)
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    Tracking = Column(String(100))
-    idsupport = Column(String(100))
-    iduser = Column(String(100))
-    name_departman = Column(String(600))
-    text = Column(Text)
-    result = Column(Text)
-    time = Column(String(200))
-    status = Column(Enum('Answered', 'Pending', 'Unseen', 'Customerresponse', 'close', name='support_status'))
+# --------------------------------------------------------------------------- #
+#  Key/value settings (card number, support id, prices, toggles, texts...)
+# --------------------------------------------------------------------------- #
+class Setting(Base):
+    __tablename__ = "settings"
+
+    key = Column(String(255), primary_key=True)
+    value = Column(Text, default="")
 
 
-# ---- Advanced models ----
-
-class NotificationLog(Base):
-    __tablename__ = "notification_log"
-    __table_args__ = (EXTEND,)
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(String(200), nullable=True)
-    type = Column(String(100), nullable=True)
-    message = Column(Text, nullable=True)
-    sent_at = Column(String(100), nullable=True)
-    status = Column(String(50), default="sent")
-
-
-class FAQ(Base):
-    __tablename__ = "faq"
-    __table_args__ = (EXTEND,)
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    question = Column(String(2000), nullable=True)
-    answer = Column(Text, nullable=True)
-    order_num = Column(Integer, default=0)
-
-
-class UserRule(Base):
-    __tablename__ = "user_rule"
-    __table_args__ = (EXTEND,)
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    text = Column(Text, nullable=True)
-    is_active = Column(String(20), default="1")
-
-
-class WelcomeGift(Base):
-    __tablename__ = "welcome_gift"
-    __table_args__ = (EXTEND,)
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    gift_type = Column(String(100), default="balance")
-    amount = Column(String(200), default="0")
-    is_active = Column(String(20), default="0")
-
-
-class ServiceTransfer(Base):
-    __tablename__ = "service_transfer"
-    __table_args__ = (EXTEND,)
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    invoice_id = Column(String(200), nullable=True)
-    from_user = Column(String(200), nullable=True)
-    to_user = Column(String(200), nullable=True)
-    transfer_time = Column(String(100), nullable=True)
-    status = Column(String(50), default="completed")
-
-
-class ServiceRating(Base):
-    __tablename__ = "service_rating"
-    __table_args__ = (EXTEND,)
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(String(200), nullable=True)
-    invoice_id = Column(String(200), nullable=True)
-    rating = Column(Integer, default=0)
-    comment = Column(Text, nullable=True)
-    rated_at = Column(String(100), nullable=True)
-
-
-class OperationQueue(Base):
-    __tablename__ = "operation_queue"
-    __table_args__ = (EXTEND,)
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    operation = Column(String(100), nullable=True)
-    data = Column(Text, nullable=True)
-    status = Column(String(50), default="pending")
-    panel_id = Column(Integer, nullable=True)
-    created_at = Column(String(100), nullable=True)
-    retry_count = Column(Integer, default=0)
+# --------------------------------------------------------------------------- #
+#  Default settings bootstrap
+# --------------------------------------------------------------------------- #
+DEFAULT_SETTINGS = {
+    "bot_status": "on",                 # on / off (maintenance)
+    "card_number": "0000-0000-0000-0000",
+    "card_holder": "نام صاحب کارت",
+    "support_id": "",                   # @username for support
+    "channel_id": "",                   # @channel for forced join (empty = off)
+    "report_chat_id": "",               # group/channel id to receive reports
+    "test_enabled": "1",
+    "test_volume_gb": "1",
+    "test_days": "1",
+    "test_limit_per_user": "1",
+    "referral_gift": "5000",
+    "wheel_enabled": "1",
+    "min_charge": "10000",
+    "max_charge": "5000000",
+    # forced channel join (comma separated @channels, empty = off)
+    "join_channels": "",
+    "join_enabled": "0",
+    # custom service (user picks own volume/days)
+    "custom_enabled": "0",
+    "custom_price_per_gb": "1000",      # toman per GB
+    "custom_price_per_day": "1000",     # toman per day
+    "custom_min_gb": "1",
+    "custom_max_gb": "200",
+    "custom_min_days": "1",
+    "custom_max_days": "180",
+    "custom_panel_id": "0",             # 0 = let user pick location
+    # discount / gift
+    "discount_enabled": "1",
+    "giftcode_enabled": "1",
+    # agent / reseller
+    "agent_enabled": "0",
+    "agent_request_price": "0",          # cost (toman) to request agent (0 = free)
+    "agent_default_discount": "10",      # default % discount granted on approval
+    # online payment gateways
+    "zarinpal_enabled": "0",
+    "zarinpal_merchant": "",             # Zarinpal merchant id
+    "aqayepardakht_enabled": "0",
+    "aqayepardakht_pin": "",             # AqayePardakht pin
+    "nowpayments_enabled": "0",
+    "nowpayments_api_key": "",
+    # public base url for callbacks (only needed for card-redirect gateways)
+    "public_base_url": "",
+    # cron / automation
+    "cron_enabled": "1",
+    "expire_reminder_days": "3",         # warn this many days before expiry
+    "nightly_report": "1",               # send nightly summary to report chat
+    "auto_remove_expired": "0",          # delete config from panel when expired
+    "auto_backup": "0",                  # send daily db backup to admin
+    "welcome_text": (
+        "🎉 به ربات فروش کانفیگ خوش آمدید!\n\n"
+        "از منوی پایین می‌توانید سرویس بخرید، اکانت تست بگیرید، "
+        "کیف پول خود را شارژ کنید و سرویس‌هایتان را مدیریت کنید."
+    ),
+    "rules_text": "قوانین ربات هنوز تنظیم نشده است.",
+    "help_text": "برای دریافت آموزش اتصال با پشتیبانی در ارتباط باشید.",
+    # report topic thread ids (optional; empty = group general thread)
+    "topic_buy": "",
+    "topic_payment": "",
+    "topic_test": "",
+    "topic_support": "",
+    "topic_agent": "",
+    "topic_error": "",
+    "topic_cron": "",
+    "topic_night": "",
+}
 
 
-class PanelNode(Base):
-    __tablename__ = "panel_node"
-    __table_args__ = (EXTEND,)
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    panel_id = Column(Integer, nullable=True)
-    name = Column(String(500), nullable=True)
-    address = Column(String(1000), nullable=True)
-    status = Column(String(100), default="active")
-    last_check = Column(String(100), nullable=True)
-
-
-class UserLimit(Base):
-    __tablename__ = "user_limit"
-    __table_args__ = (EXTEND,)
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(String(200), nullable=True)
-    product_id = Column(Integer, nullable=True)
-    limit_count = Column(Integer, default=1)
-    used_count = Column(Integer, default=0)
-
-
-class PaymentLock(Base):
-    __tablename__ = "payment_lock"
-    __table_args__ = (EXTEND,)
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(String(200), nullable=True)
-    gateway_name = Column(String(200), nullable=True)
-    required_success_count = Column(Integer, default=3)
-    success_count = Column(Integer, default=0)
-    is_locked = Column(String(20), default="1")
-
-
-# FIX: removed duplicate primary_key on gateway_name
-class CashbackSetting(Base):
-    __tablename__ = "cashback_setting"
-    __table_args__ = (EXTEND,)
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    gateway_name = Column(String(200), nullable=False, unique=True)
-    percent = Column(String(20), default="0")
-    is_active = Column(String(20), default="0")
-
-
-class AutoReceipt(Base):
-    __tablename__ = "auto_receipt"
-    __table_args__ = (EXTEND,)
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(String(200), nullable=True)
-    amount = Column(String(200), nullable=True)
-    photo_id = Column(String(1000), nullable=True)
-    status = Column(String(100), default="pending")
-    verified_by = Column(String(200), default="auto")
-    created_at = Column(String(100), nullable=True)
-    verified_at = Column(String(100), nullable=True)
-
-
-class ExtendThreshold(Base):
-    __tablename__ = "extend_threshold"
-    __table_args__ = (EXTEND,)
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    product_id = Column(Integer, nullable=True)
-    min_days_remaining = Column(Integer, default=3)
-    is_active = Column(String(20), default="0")
-
-
-class NightlyReport(Base):
-    __tablename__ = "nightly_report"
-    __table_args__ = (EXTEND,)
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    report_date = Column(String(100), nullable=True)
-    total_users = Column(Integer, default=0)
-    active_users = Column(Integer, default=0)
-    total_sales = Column(Integer, default=0)
-    total_revenue = Column(String(200), default="0")
-    best_hour = Column(String(50), nullable=True)
-    change_rate = Column(String(50), default="0%")
-
-
-# Function to initialize default settings
-async def init_default_settings():
-    from sqlalchemy.future import select
-    from app.database import async_session
+async def get_setting(key: str, default: str = "") -> str:
     async with async_session() as session:
-        result = await session.execute(select(Setting).limit(1))
-        if not result.scalar_one_or_none():
-            default_setting = Setting()
-            session.add(default_setting)
-            await session.commit()
-            # default setting inserted
+        row = (await session.execute(select(Setting).where(Setting.key == key))).scalar_one_or_none()
+        if row is None:
+            return DEFAULT_SETTINGS.get(key, default)
+        return row.value
 
-        pay_defaults = [
-            ("Cartstatus", "oncard"), ("nowpaymentstatus", "offnowpayment"),
-            ("statusaqayepardakht", "offaqayepardakht"), ("zarinpalstatus", "offzarinpal"),
-            ("plisioStatus", "offplisio"), ("rialGatewayStatus", "offrialgateway"),
-            ("customGatewayStatus", "offcustomgateway"), ("starsStatus", "offstars"),
-            ("tronStatus", "offtron"),
-            ("minbalance", "20000"), ("maxbalance", "1000000"),
-            ("cashback_card", "0"), ("cashback_nowpayment", "0"),
-            ("cashback_zarinpal", "0"), ("cashback_plisio", "0"),
-            ("welcome_gift_active", "0"), ("welcome_gift_amount", "5000"),
-            ("welcome_gift_type", "balance"),
-            ("rules_text", ""), ("rules_active", "0"),
-            ("faq_active", "0"), ("rating_active", "1"),
-            ("transfer_active", "1"), ("change_location_limit", "3"),
-            ("auto_receipt_active", "0"),
-            ("gateway_lock_count", "0"),
-            ("extend_threshold_days", "3"),
-            ("score_per_purchase", "10"), ("score_per_referral", "5"),
-            ("notify_inactive_days", "7"),
-            ("max_test_per_user", "1"), ("max_test_total", "0"),
-        ]
-        for name, value in pay_defaults:
-            exists = await session.execute(select(PaySetting).where(PaySetting.NamePay == name))
-            if not exists.scalar_one_or_none():
-                session.add(PaySetting(NamePay=name, ValuePay=value))
+
+async def set_setting(key: str, value: str) -> None:
+    async with async_session() as session:
+        row = (await session.execute(select(Setting).where(Setting.key == key))).scalar_one_or_none()
+        if row is None:
+            session.add(Setting(key=key, value=str(value)))
+        else:
+            row.value = str(value)
         await session.commit()
-        # pay settings initialized
-        # defaults ready
+
+
+async def init_default_settings() -> None:
+    async with async_session() as session:
+        existing = {
+            r.key for r in (await session.execute(select(Setting))).scalars().all()
+        }
+        for key, value in DEFAULT_SETTINGS.items():
+            if key not in existing:
+                session.add(Setting(key=key, value=value))
+        await session.commit()

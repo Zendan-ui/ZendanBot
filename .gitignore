@@ -1,42 +1,9 @@
-# Byte-compiled / optimized
 __pycache__/
 *.py[cod]
-*$py.class
-
-# Virtual environments
 venv/
 .venv/
-env/
-
-# Environment variables
-.env
-
-# Database
 *.db
 *.sqlite3
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Distribution
-dist/
-build/
-*.egg-info/
-
-# Logs
+.env
+_smoke_test.db
 *.log
-logs/
-
-# QR temp files
-qr_*.png
-
-# Backup files
-backups/
-*.bak

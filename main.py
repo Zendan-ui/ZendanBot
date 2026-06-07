@@ -1,21 +1,20 @@
-"""ZendanBot entry point. Long-polling mode."""
+"""ZendanBot entry point — long-polling mode."""
 import asyncio
 import logging
 import sys
-import traceback
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 
+from app.bot.admin import router as admin_router
+from app.bot.fallback import router as fallback_router
+from app.bot.glass import router as glass_router
+from app.bot.handlers import router as user_router
 from app.config import settings
 from app.database import init_db
 from app.models import init_default_settings
-from app.bot.handlers import router as bot_router
-from app.bot.advanced import router as advanced_router
-from app.topics import init_default_topics
-from app.cron.automation import start_all_crons
 
 logging.basicConfig(
     level=logging.INFO if settings.DEBUG else logging.WARNING,
@@ -41,49 +40,45 @@ async def main() -> None:
         logger.error("BOT_TOKEN is empty or invalid. Edit .env and set a real token from @BotFather.")
         sys.exit(1)
 
-    try:
-        await init_db()
-        await init_default_settings()
-        await init_default_topics()
-        logger.info("Database and defaults are ready.")
-    except Exception as exc:
-        logger.error("Database init failed: %s", exc)
-        logger.error(traceback.format_exc())
-        sys.exit(1)
+    await init_db()
+    await init_default_settings()
+    logger.info("Database and defaults ready.")
 
-    bot = Bot(
-        token=settings.BOT_TOKEN,
-        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
-    )
+    bot = Bot(token=settings.BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = Dispatcher(storage=MemoryStorage())
-    dp.include_router(bot_router)
-    dp.include_router(advanced_router)
+
+    # order matters: admin first (its middleware restricts to admin),
+    # then user, then catch-all fallback LAST.
+    dp.include_router(glass_router)
+    dp.include_router(admin_router)
+    dp.include_router(user_router)
+    dp.include_router(fallback_router)
 
     try:
         me = await bot.get_me()
         logger.info("Logged in as @%s (id=%s)", me.username, me.id)
-    except Exception as exc:
+        if not settings.BOT_USERNAME or settings.BOT_USERNAME == "testbot":
+            settings.BOT_USERNAME = me.username or settings.BOT_USERNAME
+    except Exception as exc:  # noqa: BLE001
         logger.error("Cannot reach Telegram with this token: %s", exc)
-        logger.error("Check that BOT_TOKEN is correct and that the server is not blocked.")
         await bot.session.close()
         sys.exit(1)
 
-    try:
-        await bot.delete_webhook(drop_pending_updates=False)
-        logger.info("Webhook cleared; polling mode is active.")
-    except Exception as exc:
-        logger.warning("delete_webhook failed: %s", exc)
+    await bot.delete_webhook(drop_pending_updates=True)
 
     try:
-        start_all_crons(bot)
-        logger.info("Cron engine started.")
-    except Exception as exc:
-        logger.warning("Cron engine not started: %s", exc)
+        from app.cron import start_scheduler
+        scheduler = start_scheduler(bot)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Scheduler not started: %s", exc)
+        scheduler = None
 
     logger.info("Bot is running. Press Ctrl+C to stop.")
     try:
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
+        if scheduler:
+            scheduler.shutdown(wait=False)
         await bot.session.close()
 
 
@@ -92,7 +87,3 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         logger.info("Stopped.")
-    except Exception as exc:
-        logger.error("Fatal error: %s", exc)
-        logger.error(traceback.format_exc())
-        sys.exit(1)

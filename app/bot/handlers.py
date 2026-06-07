@@ -1,1022 +1,1279 @@
-from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.filters import Command, CommandStart
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-from app.bot.keyboards import (
-    main_menu, admin_panel_keyboard, payment_methods_keyboard,
-    products_keyboard, panels_keyboard, confirm_keyboard
-)
-from app.database import async_session
-from app.models import User, Setting, Product, MarzbanPanel, Invoice, PaySetting, SupportMessage, Discount, Help, Admin, FAQ, ServiceRating, ServiceTransfer, OperationQueue, UserLimit, PaymentLock, AutoReceipt, ExtendThreshold, WelcomeGift
-from sqlalchemy.future import select
-from app.config import settings
-from app.security import (
-    bot_rate_limiter, payment_rate_limiter, sanitize_text, 
-    validate_amount, is_authorized_admin, anti_spam, mask_sensitive
-)
-from app.panels.marzban import MarzbanAPI
-from app.panels.xui import XUIPanel
-from app.panels.alireza import AlirezaPanel
-from app.panels.hiddify import HiddifyPanel
-from app.panels.sui import SUIPanel
-from app.panels.wireguard import WGDashboardPanel
-from app.panels.mikrotik import MikrotikPanel
-from app.panels.remnawave import RemnawavePanel
-from app.panels.eylan import EylanPanel
-from app.panels.pasargad import PasargadPanel
-from app.panels.marzneshin import MarzneshinPanel
-from app.topics import get_topic_id, send_to_topic
+"""User-facing handlers. Inline-driven flows; reply main menu always escapes
+any state, so the user can never get stuck ("buttons stop working")."""
+from __future__ import annotations
+
 import logging
 import random
-import json
-from datetime import datetime, timedelta
+
+from aiogram import F, Router
+from aiogram.filters import Command, CommandStart
+from aiogram.fsm.context import FSMContext
+from aiogram.types import CallbackQuery, Message
+from sqlalchemy.future import select
+
+from app.bot import keyboards as kb
+from app.bot.states import UserSG
+from app.config import settings
+from app.database import async_session
+from app.models import (
+    AgentRequest, Category, Discount, GiftCode, GiftCodeUsed, Panel, Product,
+    Receipt, Service, Ticket, User, get_setting,
+)
+from app.security import bot_rate_limiter, sanitize_text
+from app.services import (
+    change_service_link, fetch_usage, provision_service,
+    provision_test_service, renew_service, toggle_service,
+)
 
 router = Router()
 logger = logging.getLogger(__name__)
 
-class UserStates(StatesGroup):
-    main = State()
-    buying = State()
-    selecting_product = State()
-    selecting_panel = State()
-    entering_volume = State()
-    entering_time = State()
-    entering_note = State()
-    confirming_purchase = State()
-    paying = State()
-    support = State()
-    wallet_charge = State()
-    extending = State()
-    viewing_services = State()
-    service_action = State()
-    bulk_buy = State()
 
-# ==================== STAGE 1: CORE USER FLOWS (Purchase, Services, Test, Extend, Wallet) ====================
+# --------------------------------------------------------------------------- #
+#  helpers
+# --------------------------------------------------------------------------- #
+async def custom_enabled() -> bool:
+    return await get_setting("custom_enabled", "0") == "1"
 
-@router.message(CommandStart())
-async def cmd_start(message: Message, state: FSMContext):
-    user_id = str(message.from_user.id)
-    args = message.text.split()
-    referral_code = None
-    if len(args) > 1:
-        referral_code = sanitize_text(args[1])
 
-    if not bot_rate_limiter.is_allowed(user_id):
-        await message.answer("⏳ لطفاً کمی صبر کنید و دوباره تلاش کنید.")
-        return
+async def menu_markup():
+    return kb.main_menu(custom_enabled=await custom_enabled())
 
-    safe_username = sanitize_text(message.from_user.username or "none")
 
+async def get_or_create_user(message: Message, referrer_id: int | None = None) -> User:
+    uid = message.from_user.id
     async with async_session() as session:
-        result = await session.execute(select(User).where(User.id == user_id))
-        user = result.scalar_one_or_none()
-        
-        if not user:
-            new_user = User(
-                id=user_id,
-                username=safe_username,
-                Balance=0,
-                step="",
-                lang="fa",
-                agent="f",
-                User_Status="active",
-                register=str(int(datetime.now().timestamp())),
-                limit_usertest=1,
-                codeInvitation=referral_code,
+        user = (await session.execute(select(User).where(User.id == uid))).scalar_one_or_none()
+        if user is None:
+            user = User(
+                id=uid,
+                username=message.from_user.username or "",
+                first_name=message.from_user.first_name or "",
+                referrer_id=referrer_id if referrer_id and referrer_id != uid else None,
             )
-            session.add(new_user)
+            session.add(user)
             await session.commit()
-
-            # Affiliate welcome gift logic (Stage 2)
-            if referral_code and referral_code != user_id:
-                referrer = (await session.execute(select(User).where(User.id == referral_code))).scalar_one_or_none()
-                if referrer:
-                    gift = 5000  # Default, can be from DB
-                    referrer.Balance += gift
+            if user.referrer_id:
+                ref = (await session.execute(
+                    select(User).where(User.id == user.referrer_id)
+                )).scalar_one_or_none()
+                if ref:
+                    gift = int(await get_setting("referral_gift", "0") or 0)
+                    ref.balance += gift
+                    ref.referrals_count += 1
                     await session.commit()
                     try:
-                        await message.bot.send_message(int(referrer.id), f"🎁 هدیه زیرمجموعه جدید: {gift} تومان به کیف پول شما اضافه شد.")
-                    except:
+                        await message.bot.send_message(
+                            ref.id,
+                            f"🎁 یک زیرمجموعه جدید اضافه شد! مبلغ {gift:,} تومان به کیف پول شما اضافه شد.",
+                        )
+                    except Exception:  # noqa: BLE001
                         pass
-            await message.answer(
-                f"🎉 <b>خوش آمدید به {settings.BOT_FULL_NAME}</b>\n\n"
-                "به پلتفرم حرفه‌ای و امن فروش سرویس VPN خوش آمدید.\n"
-                "تمام قابلیت‌های پیشرفته بدون هیچ محدودیتی در دسترس شماست.\n\n"
-                "از منوی زیر شروع کنید:",
-                reply_markup=main_menu(),
-                parse_mode="HTML"
-            )
-        else:
-            await message.answer(
-                f"👋 دوباره خوش آمدید، {message.from_user.first_name}!\n\n"
-                f"موجودی شما: <b>{user.Balance}</b> تومان",
-                reply_markup=main_menu()
-            )
-    
-    await state.set_state(UserStates.main)
+        return user
 
-# ---------- FULL BUY FLOW (Stage 1) ----------
-@router.message(F.text == "🛍 خرید سرویس")
-async def start_buy(message: Message, state: FSMContext):
-    user_id = str(message.from_user.id)
-    if not bot_rate_limiter.is_allowed(user_id):
-        await message.answer("⏳ لطفاً کمی صبر کنید.")
-        return
 
-    await message.answer(
-        "🛍 <b>خرید سرویس</b>\n\nلطفاً محصول مورد نظر خود را انتخاب کنید:",
-        reply_markup=await products_keyboard(),
-        parse_mode="HTML"
-    )
-    await state.set_state(UserStates.selecting_product)
+async def report(bot, text: str, kind: str = "buy") -> None:
+    from app.reports import send_report
+    await send_report(bot, kind, text)
 
-@router.message(UserStates.selecting_product)
-async def select_product(message: Message, state: FSMContext):
-    product_name = sanitize_text(message.text)
-    async with async_session() as session:
-        product = (await session.execute(
-            select(Product).where(Product.name_product == product_name)
-        )).scalar_one_or_none()
 
-    if not product:
-        await message.answer("محصول نامعتبر است. لطفاً از لیست انتخاب کنید.")
-        return
+def is_admin(user_id) -> bool:
+    return str(user_id) == str(settings.ADMIN_ID)
 
-    await state.update_data(selected_product=product_name, product_id=product.id)
-    await message.answer(
-        "🌐 لطفاً موقعیت (پنل) سرویس را انتخاب کنید:",
-        reply_markup=await panels_keyboard()
-    )
-    await state.set_state(UserStates.selecting_panel)
 
-@router.message(UserStates.selecting_panel)
-async def select_panel(message: Message, state: FSMContext):
-    panel_name = sanitize_text(message.text)
-    data = await state.get_data()
-    await state.update_data(selected_panel=panel_name)
-
-    await message.answer(
-        "🔋 حجم سرویس را به گیگابایت وارد کنید (مثال: 50):"
-    )
-    await state.set_state(UserStates.entering_volume)
-
-@router.message(UserStates.entering_volume)
-async def enter_volume(message: Message, state: FSMContext):
-    volume = validate_amount(message.text, 1, 10000)
-    if not volume:
-        await message.answer("حجم نامعتبر است. عدد بین 1 تا 10000 وارد کنید.")
-        return
-    await state.update_data(volume=volume)
-    await message.answer("⏳ مدت زمان سرویس را به روز وارد کنید (مثال: 30):")
-    await state.set_state(UserStates.entering_time)
-
-@router.message(UserStates.entering_time)
-async def enter_time(message: Message, state: FSMContext):
-    days = validate_amount(message.text, 1, 365)
-    if not days:
-        await message.answer("زمان نامعتبر است.")
-        return
-    await state.update_data(days=days)
-    await message.answer("📝 یادداشت دلخواه برای کانفیگ (اختیاری - حداکثر 150 کاراکتر):")
-    await state.set_state(UserStates.entering_note)
-
-@router.message(UserStates.entering_note)
-async def enter_note(message: Message, state: FSMContext):
-    note = sanitize_text(message.text, 150)
-    await state.update_data(note=note)
-    
-    data = await state.get_data()
-    text = (
-        f"📇 <b>پیش‌فاکتور شما:</b>\n\n"
-        f"محصول: {data.get('selected_product')}\n"
-        f"پنل: {data.get('selected_panel')}\n"
-        f"حجم: {data.get('volume')} گیگ\n"
-        f"زمان: {data.get('days')} روز\n"
-        f"یادداشت: {note or 'بدون یادداشت'}\n\n"
-        "برای تایید خرید روی دکمه زیر کلیک کنید."
-    )
-    await message.answer(text, reply_markup=confirm_keyboard(), parse_mode="HTML")
-    await state.set_state(UserStates.confirming_purchase)
-
-@router.callback_query(F.data == "confirm_purchase", UserStates.confirming_purchase)
-async def confirm_purchase(callback: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    user_id = str(callback.from_user.id)
-
-    async with async_session() as session:
-        user = (await session.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
-        product = (await session.execute(select(Product).where(Product.id == data.get('product_id')))).scalar_one_or_none()
-        panel = (await session.execute(select(MarzbanPanel).where(MarzbanPanel.name_panel == data.get('selected_panel')))).scalar_one_or_none()
-
-        price = int(product.price_product) if product else 50000
-        balance = user.Balance if user else 0
-
-        if balance >= price:
-            # Pay from wallet
-            user.Balance -= price
-            await session.commit()
-
-            # Create service
-            result = await create_real_service(panel, data, user_id)
-            if result.get("success"):
-                invoice = Invoice(
-                    id_invoice=f"INV{int(datetime.now().timestamp())}",
-                    id_user=user_id,
-                    username=result.get("username"),
-                    Service_location=data.get('selected_panel'),
-                    name_product=data.get('selected_product'),
-                    price_product=str(price),
-                    Volume=str(data.get('volume')),
-                    Service_time=str(data.get('days')),
-                    Status="active",
-                    time_sell=str(int(datetime.now().timestamp())),
-                    note=data.get('note')
-                )
-                session.add(invoice)
-                await session.commit()
-
-                # Notify via topic
-                topic_id = await get_topic_id("buyreport")
-                await send_to_topic(
-                    callback.bot, 
-                    settings.ADMIN_ID,  # or your report group
-                    topic_id,
-                    f"خرید جدید از کاربر {user_id}\nسرویس: {result.get('username')}"
-                )
-
-                await callback.message.answer("✅ سرویس شما با موفقیت ساخته شد!")
-            else:
-                await callback.message.answer("❌ خطا در ساخت سرویس. موجودی برگشت داده شد.")
-                user.Balance += price
-                await session.commit()
-        else:
-            await callback.message.answer(
-                "💰 موجودی کافی نیست. لطفاً کیف پول را شارژ کنید یا روش پرداخت انتخاب کنید.",
-                reply_markup=payment_methods_keyboard()
-            )
-            await state.set_state(UserStates.paying)
-
-    await state.clear()
-
-async def create_real_service(panel, data: dict, user_id: str):
-    """Create actual user on the selected panel"""
-    username = f"zendan_{user_id}_{int(datetime.now().timestamp())}"
-    volume = int(data.get('volume', 50))
-    days = int(data.get('days', 30))
-
-    try:
-        if "marzban" in (panel.name_panel or "").lower() or panel.type == "marzban":
-            api = MarzbanAPI(panel.url_panel, panel.username_panel, panel.password_panel)
-            await api.login()
-            res = await api.create_user(username, data_limit=volume, expire_days=days)
-            return {"success": True, "username": username, "data": res}
-        elif "xui" in (panel.name_panel or "").lower():
-            api = XUIPanel(panel.url_panel, panel.username_panel, panel.password_panel)
-            await api.login()
-            res = await api.create_user(username, data_limit=volume, expire_days=days)
-            return {"success": True, "username": username}
-        # Add other panels here...
-        return {"success": False, "error": "Panel type not fully supported yet"}
-    except Exception as e:
-        logger.error(f"Service creation error: {e}")
-        return {"success": False, "error": str(e)}
-
-# ---------- PURCHASED SERVICES WITH ACTIONS (Stage 1) ----------
-@router.message(F.text == "🛍 سرویس‌های خریداری شده")
-async def view_purchased_services(message: Message, state: FSMContext):
-    user_id = str(message.from_user.id)
-    async with async_session() as session:
-        invoices = (await session.execute(
-            select(Invoice).where(Invoice.id_user == user_id, Invoice.Status == "active")
-        )).scalars().all()
-
-    if not invoices:
-        await message.answer("شما سرویس فعالی ندارید.")
-        return
-
-    for inv in invoices[:5]:
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔰 دریافت کانفیگ", callback_data=f"getconfig_{inv.id_invoice}")],
-            [InlineKeyboardButton(text="🔄 تغییر لینک", callback_data=f"changelink_{inv.id_invoice}")],
-            [InlineKeyboardButton(text="❌ خاموش کردن", callback_data=f"turnoff_{inv.id_invoice}"),
-             InlineKeyboardButton(text="💡 روشن کردن", callback_data=f"turnon_{inv.id_invoice}")],
-            [InlineKeyboardButton(text="📝 تغییر یادداشت", callback_data=f"note_{inv.id_invoice}")],
-            [InlineKeyboardButton(text="🚚 انتقال سرویس", callback_data=f"transfer_{inv.id_invoice}")],
-        ])
-        await message.answer(
-            f"🛍 {inv.name_product}\n"
-            f"نام کاربری: <code>{inv.username}</code>\n"
-            f"حجم: {inv.Volume} | زمان: {inv.Service_time} روز",
-            reply_markup=kb,
-            parse_mode="HTML"
-        )
-
-# Callback handlers for service actions - FULLY FUNCTIONAL (Stage 4)
-@router.callback_query(F.data.startswith("getconfig_"))
-async def get_config(callback: CallbackQuery):
-    inv_id = callback.data.split("_")[1]
-    async with async_session() as session:
-        inv = (await session.execute(select(Invoice).where(Invoice.id_invoice == inv_id))).scalar_one_or_none()
-        if inv:
-            panel = (await session.execute(select(MarzbanPanel).where(MarzbanPanel.name_panel == inv.Service_location))).scalar_one_or_none()
-            sub_url = f"https://sub.zendanbot.com/{inv.username}"
-            if panel:
-                try:
-                    api = MarzbanAPI(panel.url_panel, panel.username_panel, panel.password_panel)
-                    await api.login()
-                    user_info = await api.get_user(inv.username)
-                    sub_url = await api.get_subscription_url(inv.username) or sub_url
-                except Exception as e:
-                    logger.error(f"Panel get error: {e}")
-
-            # Generate and send real QR code (Professional styled)
-            from app.utils.qr_generator import generate_professional_qr
-            from aiogram.types import BufferedInputFile
-
-            qr_bytes = generate_professional_qr(
-                data=sub_url,
-                style="rounded",
-                card_title="🔰 ZendanBOT",
-                card_subtitle=f"Subscription: {inv.username}",
-                card_footer=f"Volume: {inv.Volume} GB  |  Time: {inv.Service_time} Days\nScan to connect",
-                fg_color=(80, 60, 200),
-                bg_color=(255, 255, 255),
-                accent_color=(120, 80, 255),
-                card_bg_color=(18, 18, 40),
-                card_border_color=(100, 80, 220),
-            )
-
-            await callback.message.answer_photo(
-                BufferedInputFile(qr_bytes, filename="qr_config.png"),
-                caption=f"🔰 <b>کانفیگ شما:</b>\n\n"
-                        f"نام کاربری: <code>{inv.username}</code>\n"
-                        f"لینک اشتراک: <code>{sub_url}</code>\n\n"
-                        "📱 اسکن کنید یا لینک را کپی کنید.",
-                parse_mode="HTML"
-            )
-        else:
-            await callback.message.answer("سرویس یافت نشد.")
-
-@router.callback_query(F.data.startswith("changelink_"))
-async def change_link(callback: CallbackQuery):
-    inv_id = callback.data.split("_")[1]
-    async with async_session() as session:
-        inv = (await session.execute(select(Invoice).where(Invoice.id_invoice == inv_id))).scalar_one_or_none()
-        if inv:
-            # Call panel to change link (real implementation)
-            panel = (await session.execute(select(MarzbanPanel).where(MarzbanPanel.name_panel == inv.Service_location))).scalar_one_or_none()
-            if panel:
-                try:
-                    api = MarzbanAPI(panel.url_panel, panel.username_panel, panel.password_panel)
-                    await api.login()
-                    # Simulate or call update
-                    await api.update_user(inv.username, reset=True)  # example
-                    await callback.message.answer("✅ لینک با موفقیت تغییر کرد. لینک جدید برایتان ارسال شد.")
-                except:
-                    await callback.message.answer("✅ لینک با موفقیت تغییر کرد (شبیه‌سازی).")
-            else:
-                await callback.message.answer("✅ لینک با موفقیت تغییر کرد.")
-        else:
-            await callback.message.answer("سرویس یافت نشد.")
-
-# Similar for turnon, turnoff, note, transfer...
-
-# ---------- TEST ACCOUNT (Enhanced) ----------
-@router.message(F.text == "🎁 اکانت تست")
-async def get_test_account(message: Message, state: FSMContext):
-    # ... (previous enhanced version with limit check)
-    await message.answer("🎁 اکانت تست در حال ساخت (با محدودیت و گزارش کامل).")
-
-# ---------- EXTEND & WALLET (Stage 1 basics) ----------
-@router.message(F.text == "💊 تمدید سرویس")
-async def extend_service(message: Message, state: FSMContext):
-    await message.answer("💊 لطفاً سرویس خود را برای تمدید انتخاب کنید (لیست کامل در نسخه Stage 1+).")
-
-@router.message(F.text == "💰 کیف پول")
-async def wallet(message: Message, state: FSMContext):
-    # ... previous
-    await message.answer("💰 کیف پول + روش‌های پرداخت کامل متصل به ماژول‌های پرداخت.")
-
-# ==================== ADMIN & OTHER (Base for later stages) ====================
-
-@router.message(Command("panel"))
-async def admin_panel_cmd(message: Message):
-    if not is_authorized_admin(str(message.from_user.id)):
-        return
-    await message.answer("👨‍💼 پنل مدیریت ZendanBOT", reply_markup=admin_panel_keyboard())
-
-# Stage 1 completed for core user experience.
-# Next stages will add affiliates, wheel, full admin tools, crons, web panel, etc.
-
-# ==================== STAGE 2: Affiliates, Wheel/Lottery, Support, Help, Verification, Channel Join ====================
-
-# Channel join check (basic enforcement - Stage 2)
-async def check_channel_membership(bot, user_id: str, channels: list) -> bool:
-    for ch in channels:
+async def send_config(message, caption: str, sub_url: str, remark: str = ""):
+    """Send a config with a professional QR if possible, else just text."""
+    if sub_url:
         try:
-            member = await bot.get_chat_member(chat_id=ch, user_id=int(user_id))
-            if member.status in ["member", "administrator", "creator"]:
-                continue
-            else:
-                return False
-        except:
-            return False
+            from aiogram.types import BufferedInputFile
+            from app.qr import make_config_qr
+            png = make_config_qr(sub_url, title="ZendanBot", subtitle=remark or "Scan to connect")
+            await message.answer_photo(
+                BufferedInputFile(png, filename="config.png"),
+                reply_markup=await menu_markup(),
+                caption=caption,
+            )
+            return
+        except Exception:  # noqa: BLE001
+            pass
+    await message.answer(caption, reply_markup=await menu_markup())
+
+
+# --------------------------------------------------------------------------- #
+#  Forced channel join
+# --------------------------------------------------------------------------- #
+async def _join_channels() -> list[str]:
+    if await get_setting("join_enabled", "0") != "1":
+        return []
+    raw = await get_setting("join_channels", "")
+    return [c.strip() for c in raw.split(",") if c.strip()]
+
+
+async def not_joined_channels(bot, user_id: int) -> list[str]:
+    """Return the list of channels the user has NOT joined yet."""
+    missing = []
+    for ch in await _join_channels():
+        try:
+            member = await bot.get_chat_member(chat_id=ch, user_id=user_id)
+            if member.status in ("left", "kicked"):
+                missing.append(ch)
+        except Exception:  # noqa: BLE001
+            # if we can't verify (bot not admin / wrong id) skip enforcement
+            continue
+    return missing
+
+
+async def enforce_join(message: Message) -> bool:
+    """Return True if the user is allowed to proceed; otherwise prompt to join."""
+    missing = await not_joined_channels(message.bot, message.from_user.id)
+    if missing:
+        await message.answer(
+            "📢 برای استفاده از ربات ابتدا در کانال‌های زیر عضو شوید و سپس «بررسی عضویت» را بزنید:",
+            reply_markup=kb.join_inline(missing),
+        )
+        return False
     return True
 
-@router.message(F.text == "👥 زیرمجموعه‌گیری")
-async def affiliates_menu(message: Message, state: FSMContext):
-    user_id = str(message.from_user.id)
-    async with async_session() as session:
-        user = (await session.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
-        affiliates_count = user.affiliatescount if user else "0"
-        balance_gift = "5000"  # from settings
 
-    text = (
-        f"👥 <b>زیرمجموعه‌گیری {settings.BOT_FULL_NAME}</b>\n\n"
-        f"تعداد زیرمجموعه‌های شما: {affiliates_count}\n"
-        f"هدیه هر زیرمجموعه جدید: {balance_gift} تومان\n\n"
-        f"لینک دعوت شما:\nhttps://t.me/{settings.BOT_USERNAME}?start={user_id}\n\n"
-        "بنر زیرمجموعه‌گیری را از ادمین تنظیم کنید."
-    )
-    await message.answer(text, parse_mode="HTML")
+@router.callback_query(F.data == "check_join")
+async def cb_check_join(cb: CallbackQuery):
+    missing = await not_joined_channels(cb.bot, cb.from_user.id)
+    if missing:
+        await cb.answer("هنوز در همه کانال‌ها عضو نشده‌اید.", show_alert=True)
+        return
+    await cb.message.delete()
+    await cb.message.answer("✅ عضویت تایید شد. خوش آمدید!", reply_markup=await menu_markup())
+    await cb.answer()
 
-@router.message(F.text == "🎲 گردونه شانس")
-async def wheel_of_luck(message: Message, state: FSMContext):
-    user_id = str(message.from_user.id)
-    if not anti_spam.can_proceed(user_id, "wheel", 86400):  # once per day
-        await message.answer("⏳ امروز قبلاً شرکت کردید. فردا دوباره تلاش کنید.")
+
+# --------------------------------------------------------------------------- #
+#  /start
+# --------------------------------------------------------------------------- #
+@router.message(CommandStart())
+async def cmd_start(message: Message, state: FSMContext):
+    await state.clear()
+    if not bot_rate_limiter.is_allowed(str(message.from_user.id)):
+        return
+    if await get_setting("bot_status", "on") != "on" and not is_admin(message.from_user.id):
+        await message.answer("🛠 ربات در حال حاضر در دست تعمیر است. لطفاً بعداً مراجعه کنید.")
         return
 
-    async with async_session() as session:
-        # Get prizes from settings (Stage 4 complete)
-        setting = (await session.execute(select(Setting).limit(1))).scalar_one_or_none()
-        prizes = [5000, 10000, 25000, 50000]  # from Lottery_prize or default
-        if setting and setting.Lottery_prize:
-            try:
-                prizes = list(json.loads(setting.Lottery_prize).values())
-            except:
-                pass
+    referrer_id = None
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) > 1 and parts[1].strip().isdigit():
+        referrer_id = int(parts[1].strip())
 
-        prize = random.choice(prizes)
-        user = (await session.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
-        if user and prize > 0:
-            user.Balance += int(prize)
+    await get_or_create_user(message, referrer_id)
+    if not await enforce_join(message):
+        return
+    welcome = await get_setting("welcome_text", "")
+    await message.answer(welcome, reply_markup=await menu_markup())
+
+
+@router.message(Command("panel"))
+async def cmd_panel(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    await state.clear()
+    await message.answer("👨‍💼 پنل مدیریت", reply_markup=kb.admin_menu())
+
+
+# --------------------------------------------------------------------------- #
+#  Main reply buttons — always work, always clear state
+# --------------------------------------------------------------------------- #
+@router.message(F.text == kb.BTN_HOME)
+async def go_home(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer("🏠 منوی اصلی", reply_markup=await menu_markup())
+
+
+@router.message(F.text == kb.BTN_BUY)
+async def menu_buy(message: Message, state: FSMContext):
+    await state.clear()
+    if not await enforce_join(message):
+        return
+    async with async_session() as session:
+        cats = (await session.execute(
+            select(Category).where(Category.is_active == True)  # noqa: E712
+        )).scalars().all()
+    if cats:
+        await message.answer("🗂 یک دسته را انتخاب کنید:", reply_markup=kb.categories_inline(cats))
+        return
+    async with async_session() as session:
+        products = (await session.execute(
+            select(Product).where(Product.is_active == True)  # noqa: E712
+        )).scalars().all()
+    if not products:
+        await message.answer("فعلاً محصولی برای فروش موجود نیست.")
+        return
+    await message.answer("🛍 یکی از پلن‌ها را انتخاب کنید:",
+                         reply_markup=kb.products_inline(products))
+
+
+@router.callback_query(F.data.startswith("cat:"))
+async def cb_category(cb: CallbackQuery):
+    cid = int(cb.data.split(":")[1])
+    async with async_session() as session:
+        products = (await session.execute(
+            select(Product).where(Product.is_active == True, Product.category_id == cid)  # noqa: E712
+        )).scalars().all()
+    if not products:
+        await cb.answer("محصولی در این دسته نیست.", show_alert=True)
+        return
+    await cb.message.edit_text("🛍 یکی از پلن‌ها را انتخاب کنید:",
+                               reply_markup=kb.products_inline(products, back="back_cats"))
+    await cb.answer()
+
+
+@router.callback_query(F.data == "back_cats")
+async def cb_back_cats(cb: CallbackQuery):
+    async with async_session() as session:
+        cats = (await session.execute(
+            select(Category).where(Category.is_active == True)  # noqa: E712
+        )).scalars().all()
+    await cb.message.edit_text("🗂 یک دسته را انتخاب کنید:", reply_markup=kb.categories_inline(cats))
+    await cb.answer()
+
+
+@router.message(F.text == kb.BTN_SERVICES)
+async def menu_services(message: Message, state: FSMContext):
+    await state.clear()
+    await _show_services(message)
+
+
+async def _show_services(message: Message):
+    async with async_session() as session:
+        services = (await session.execute(
+            select(Service).where(Service.user_id == message.from_user.id)
+            .order_by(Service.id.desc())
+        )).scalars().all()
+    if not services:
+        await message.answer("شما هنوز سرویسی ندارید. از «🛍 خرید سرویس» اقدام کنید.")
+        return
+    await message.answer("📦 سرویس‌های شما:", reply_markup=kb.services_inline(services))
+
+
+@router.message(F.text == kb.BTN_TEST)
+async def menu_test(message: Message, state: FSMContext):
+    await state.clear()
+    if not await enforce_join(message):
+        return
+    if await get_setting("test_enabled", "1") != "1":
+        await message.answer("دریافت اکانت تست در حال حاضر غیرفعال است.")
+        return
+    uid = message.from_user.id
+    limit = int(await get_setting("test_limit_per_user", "1") or 1)
+    async with async_session() as session:
+        user = (await session.execute(select(User).where(User.id == uid))).scalar_one_or_none()
+        if user and user.test_used >= limit:
+            await message.answer("شما قبلاً سهمیه اکانت تست خود را دریافت کرده‌اید.")
+            return
+        panel = (await session.execute(
+            select(Panel).where(Panel.is_active == True)  # noqa: E712
+        )).scalars().first()
+    if not panel:
+        await message.answer("هیچ سروری برای ساخت اکانت تست پیکربندی نشده است.")
+        return
+    vol = int(await get_setting("test_volume_gb", "1") or 1)
+    days = int(await get_setting("test_days", "1") or 1)
+    await message.answer("⏳ در حال ساخت اکانت تست...")
+    ok, msg, service = await provision_test_service(uid, panel, vol, days)
+    if not ok:
+        await message.answer(msg)
+        return
+    async with async_session() as session:
+        user = (await session.execute(select(User).where(User.id == uid))).scalar_one_or_none()
+        if user:
+            user.test_used += 1
             await session.commit()
+    await send_config(
+        message,
+        f"🎁 <b>اکانت تست شما آماده شد</b>\n\n"
+        f"حجم: {vol} گیگ | مدت: {days} روز\n"
+        f"🔗 لینک اتصال:\n<code>{service.sub_url}</code>",
+        service.sub_url, service.remark,
+    )
+    await report(message.bot, f"🎁 اکانت تست جدید توسط کاربر {uid}", "test")
 
-            await message.answer(f"🎉 تبریک! شما {prize} تومان برنده شدید و به کیف پول اضافه شد.")
-            topic_id = await get_topic_id("porsantreport")
-            await send_to_topic(message.bot, settings.ADMIN_ID, topic_id, f"برنده گردونه شانس: {user_id} - {prize} تومان")
-        else:
-            await message.answer("متأسفانه برنده نشدید. فردا دوباره امتحان کنید!")
 
-# ---------- FULL SUPPORT (Stage 2) ----------
-@router.message(F.text == "☎️ پشتیبانی")
-async def support_menu(message: Message, state: FSMContext):
+@router.message(F.text == kb.BTN_WALLET)
+async def menu_wallet(message: Message, state: FSMContext):
+    await state.clear()
     async with async_session() as session:
-        # Get departments
-        depts = (await session.execute(select(Setting))).scalar_one_or_none()  # simplified, use departman table in full
+        user = (await session.execute(
+            select(User).where(User.id == message.from_user.id)
+        )).scalar_one_or_none()
+    bal = user.balance if user else 0
+    await message.answer(
+        f"💰 <b>کیف پول شما</b>\n\nموجودی: <b>{bal:,}</b> تومان",
+        reply_markup=kb.wallet_inline(),
+    )
+
+
+@router.message(F.text == kb.BTN_REFERRAL)
+async def menu_referral(message: Message, state: FSMContext):
+    await state.clear()
+    uid = message.from_user.id
+    async with async_session() as session:
+        user = (await session.execute(select(User).where(User.id == uid))).scalar_one_or_none()
+    count = user.referrals_count if user else 0
+    gift = await get_setting("referral_gift", "0")
+    username = settings.BOT_USERNAME.lstrip("@")
+    await message.answer(
+        f"👥 <b>زیرمجموعه‌گیری</b>\n\n"
+        f"تعداد زیرمجموعه‌ها: <b>{count}</b>\n"
+        f"هدیه هر زیرمجموعه: <b>{int(gift):,}</b> تومان\n\n"
+        f"🔗 لینک دعوت شما:\n<code>https://t.me/{username}?start={uid}</code>"
+        + ("\n\n🤝 برای درخواست نمایندگی دستور /agent را بزنید."
+           if await get_setting("agent_enabled", "0") == "1" else ""),
+    )
+
+
+@router.message(Command("agent"))
+async def menu_agent(message: Message, state: FSMContext):
+    await state.clear()
+    if await get_setting("agent_enabled", "0") != "1":
+        await message.answer("بخش نمایندگی در حال حاضر فعال نیست.")
+        return
+    uid = message.from_user.id
+    async with async_session() as session:
+        user = (await session.execute(select(User).where(User.id == uid))).scalar_one_or_none()
+        if user and user.is_agent:
+            await message.answer(
+                f"🤝 شما هم‌اکنون نماینده هستید.\nتخفیف شما روی همه خریدها: {user.agent_discount}٪"
+            )
+            return
+        pending = (await session.execute(
+            select(AgentRequest).where(AgentRequest.user_id == uid, AgentRequest.status == "pending")
+        )).scalar_one_or_none()
+    if pending:
+        await message.answer("⏳ درخواست نمایندگی شما در حال بررسی است.")
+        return
+    price = int(await get_setting("agent_request_price", "0") or 0)
+    note = f"\n\nهزینه درخواست: {price:,} تومان (از کیف پول کسر می‌شود)" if price else ""
+    await message.answer(
+        "🤝 <b>درخواست نمایندگی</b>\n\nچند جمله درباره خودتان و میزان فروشتان بنویسید:" + note,
+        reply_markup=kb.cancel_inline(),
+    )
+    await state.set_state(UserSG.agent_note)
+
+
+@router.message(UserSG.agent_note)
+async def agent_request_submit(message: Message, state: FSMContext):
+    uid = message.from_user.id
+    note = sanitize_text(message.text or "", 1000)
+    price = int(await get_setting("agent_request_price", "0") or 0)
+    async with async_session() as session:
+        user = (await session.execute(select(User).where(User.id == uid))).scalar_one_or_none()
+        if price and (not user or user.balance < price):
+            await message.answer("موجودی کافی برای ثبت درخواست ندارید.")
+            await state.clear()
+            return
+        if price and user:
+            user.balance -= price
+        req = AgentRequest(user_id=uid, note=note)
+        session.add(req)
+        await session.commit()
+        await session.refresh(req)
+    await state.clear()
+    await message.answer("✅ درخواست نمایندگی شما ثبت شد و برای ادمین ارسال گردید.",
+                         reply_markup=await menu_markup())
+    await report(message.bot,
+                 f"🤝 درخواست نمایندگی #{req.id}\nکاربر: {uid} (@{message.from_user.username})\n"
+                 f"متن: {note}\n\nتایید: /agentok {req.id} [درصد]\nرد: /agentno {req.id}",
+                 "agent")
+    try:
+        await message.bot.send_message(
+            settings.ADMIN_ID,
+            f"🤝 درخواست نمایندگی #{req.id} از {uid}\n{note}\n\n"
+            f"تایید: /agentok {req.id} [درصد]\nرد: /agentno {req.id}",
+        )
+    except Exception:  # noqa: BLE001
         pass
 
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📞 بخش عمومی", callback_data="support_general")],
-        [InlineKeyboardButton(text="💳 بخش مالی", callback_data="support_finance")],
-        [InlineKeyboardButton(text="🔧 بخش فنی", callback_data="support_tech")],
-    ])
-    await message.answer("☎️ لطفاً بخش مورد نظر را انتخاب کنید:", reply_markup=kb)
-    await state.set_state(UserStates.support)
 
-@router.callback_query(F.data.startswith("support_"))
-async def support_department(callback: CallbackQuery, state: FSMContext):
-    dept = callback.data.split("_")[1]
-    await state.update_data(support_dept=dept)
-    await callback.message.answer("📝 پیام خود را ارسال کنید:")
-    await state.set_state(UserStates.support)
-
-@router.message(UserStates.support)
-async def support_message(message: Message, state: FSMContext):
-    user_id = str(message.from_user.id)
-    data = await state.get_data()
-    dept = data.get("support_dept", "general")
-
+@router.message(F.text == kb.BTN_WHEEL)
+async def menu_wheel(message: Message, state: FSMContext):
+    await state.clear()
+    if await get_setting("wheel_enabled", "1") != "1":
+        await message.answer("گردونه شانس در حال حاضر غیرفعال است.")
+        return
+    prize = random.choice([0, 0, 1000, 2000, 5000, 10000])
     async with async_session() as session:
-        # Save to support_message table (using existing model)
-        ticket = SupportMessage(
-            Tracking=f"TICK{int(datetime.now().timestamp())}",
-            idsupport=user_id,
-            iduser=user_id,
-            name_departman=dept,
-            text=sanitize_text(message.text),
-            result="",
-            time=str(int(datetime.now().timestamp())),
-            status="Pending"
-        )
+        user = (await session.execute(
+            select(User).where(User.id == message.from_user.id)
+        )).scalar_one_or_none()
+        if user and prize:
+            user.balance += prize
+            await session.commit()
+    if prize:
+        await message.answer(f"🎉 تبریک! شما {prize:,} تومان برنده شدید و به کیف پولتان اضافه شد.")
+    else:
+        await message.answer("😔 این بار برنده نشدید. بعداً دوباره امتحان کنید!")
+
+
+@router.message(F.text == kb.BTN_SUPPORT)
+async def menu_support(message: Message, state: FSMContext):
+    await state.clear()
+    support_id = await get_setting("support_id", "")
+    extra = f"\n\nیا مستقیم به {support_id} پیام دهید." if support_id else ""
+    await message.answer(
+        "☎️ پیام خود را بنویسید تا برای پشتیبانی ارسال شود:" + extra,
+        reply_markup=kb.cancel_inline(),
+    )
+    await state.set_state(UserSG.support_msg)
+
+
+@router.message(UserSG.support_msg)
+async def support_receive(message: Message, state: FSMContext):
+    text = sanitize_text(message.text or "", 2000)
+    if not text:
+        await message.answer("لطفاً متن پیام را ارسال کنید.")
+        return
+    async with async_session() as session:
+        ticket = Ticket(user_id=message.from_user.id, text=text)
         session.add(ticket)
         await session.commit()
-
-    # Notify admin via topic
-    topic_id = await get_topic_id("supportreport")
-    await send_to_topic(message.bot, settings.ADMIN_ID, topic_id, 
-                        f"تیکت جدید از {user_id} در بخش {dept}:\n{message.text}")
-
-    await message.answer("✅ پیام شما ثبت شد. پشتیبانی به زودی پاسخ می‌دهد.")
+        await session.refresh(ticket)
     await state.clear()
-
-# ---------- HELP / TUTORIALS (Stage 2) ----------
-@router.message(F.text == "📚 آموزش")
-async def help_menu(message: Message):
-    async with async_session() as session:
-        helps = (await session.execute(select(Help).limit(10))).scalars().all()
-
-    if not helps:
-        await message.answer("📚 بخش آموزش در حال تکمیل است.")
-        return
-
-    text = "📚 <b>آموزش‌ها</b>\n\n"
-    for h in helps:
-        text += f"• {h.name_os}\n"
-    await message.answer(text, parse_mode="HTML")
-
-# ---------- PHONE VERIFICATION (Stage 2) ----------
-@router.message(F.text == "☎️ ارسال شماره تلفن")
-async def request_phone(message: Message):
-    from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
-    kb = ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="ارسال شماره تلفن", request_contact=True)]],
-        resize_keyboard=True
-    )
-    await message.answer("لطفاً شماره تلفن خود را ارسال کنید:", reply_markup=kb)
-
-@router.message(F.contact)
-async def verify_phone(message: Message, state: FSMContext):
-    user_id = str(message.from_user.id)
-    phone = message.contact.phone_number
-
-    async with async_session() as session:
-        user = (await session.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
-        if user:
-            user.number = phone
-            user.verify = "1"
-            await session.commit()
-
-    await message.answer("✅ شماره تلفن شما با موفقیت تأیید شد.", reply_markup=main_menu())
-
-# Channel join check example (call in start if needed)
-# For full enforcement, check on buy/start
-
-# ==================== STAGE 3: Full Admin Tools (Stats, Mass Message, Agents, Discounts, Manual Orders, Gifts, Settings) ====================
-
-# New states for Stage 3
-class AdminStates(StatesGroup):
-    stats_date = State()
-    mass_message = State()
-    mass_message_type = State()
-    add_agent = State()
-    discount_code = State()
-    manual_order = State()
-    gift_volume = State()
-    settings_toggle = State()
-
-@router.message(F.text == "📊 آمار ربات")
-async def admin_detailed_stats(message: Message, state: FSMContext):
-    if not is_authorized_admin(str(message.from_user.id)):
-        return
-
-    async with async_session() as session:
-        total_users = len((await session.execute(select(User))).scalars().all())
-        active_services = len((await session.execute(select(Invoice).where(Invoice.Status == "active"))).scalars().all())
-        total_balance = sum(u.Balance for u in (await session.execute(select(User))).scalars().all())
-
-        # Daily stats example
-        today = datetime.now().date()
-        daily_invoices = [inv for inv in (await session.execute(select(Invoice))).scalars().all() if datetime.fromtimestamp(int(inv.time_sell or 0)).date() == today]
-        daily_revenue = sum(int(inv.price_product or 0) for inv in daily_invoices)
-
-    text = (
-        f"📊 <b>آمار کامل {settings.BOT_FULL_NAME}</b>\n\n"
-        f"👥 کل کاربران: <b>{total_users}</b>\n"
-        f"🛍 سرویس‌های فعال: <b>{active_services}</b>\n"
-        f"💰 مجموع موجودی کاربران: <b>{total_balance:,}</b> تومان\n"
-        f"📅 درآمد امروز: <b>{daily_revenue:,}</b> تومان\n"
-        f"🛍 سفارشات امروز: <b>{len(daily_invoices)}</b>\n\n"
-        "برای آمار تاریخ دلخواه، تاریخ را ارسال کنید (مثال: 2026-06-01)."
-    )
-    await message.answer(text, parse_mode="HTML")
-    await state.set_state(AdminStates.stats_date)
-
-@router.message(AdminStates.stats_date)
-async def stats_by_date(message: Message, state: FSMContext):
-    # Parse date and show detailed stats (simplified)
-    date_str = sanitize_text(message.text)
-    await message.answer(f"آمار برای تاریخ {date_str} در حال محاسبه... (گزارش کامل در مرحله ۳)")
-    await state.clear()
-
-@router.message(F.text == "📨 ارسال پیام همگانی")
-async def mass_message_start(message: Message, state: FSMContext):
-    if not is_authorized_admin(str(message.from_user.id)):
-        return
-
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="به همه کاربران", callback_data="mass_all")],
-        [InlineKeyboardButton(text="به خریداران", callback_data="mass_buyers")],
-        [InlineKeyboardButton(text="به کسانی که خرید نداشتند", callback_data="mass_nonbuyers")],
-        [InlineKeyboardButton(text="به نمایندگان", callback_data="mass_agents")],
-    ])
-    await message.answer("📨 نوع مخاطبان را انتخاب کنید:", reply_markup=kb)
-    await state.set_state(AdminStates.mass_message_type)
-
-@router.callback_query(F.data.startswith("mass_"), AdminStates.mass_message_type)
-async def mass_message_type_selected(callback: CallbackQuery, state: FSMContext):
-    mtype = callback.data.split("_")[1]
-    await state.update_data(mass_type=mtype)
-    await callback.message.answer("متن پیام را ارسال کنید (می‌توانید با دکمه هم باشد):")
-    await state.set_state(AdminStates.mass_message)
-
-@router.message(AdminStates.mass_message)
-async def send_mass_message(message: Message, state: FSMContext):
-    data = await state.get_data()
-    mtype = data.get("mass_type", "all")
-    text = sanitize_text(message.text)
-
-    async with async_session() as session:
-        if mtype == "all":
-            users = (await session.execute(select(User))).scalars().all()
-        elif mtype == "buyers":
-            users = [u for u in (await session.execute(select(User))).scalars().all() if any(i.id_user == u.id for i in (await session.execute(select(Invoice))).scalars().all())]
-        else:
-            users = (await session.execute(select(User))).scalars().all()
-
-        sent = 0
-        for u in users:
-            try:
-                await message.bot.send_message(u.id, text)
-                sent += 1
-            except:
-                pass
-
-    await message.answer(f"✅ پیام به {sent} کاربر ارسال شد.")
-    # Report via topic
-    topic_id = await get_topic_id("otherreport")
-    await send_to_topic(message.bot, settings.ADMIN_ID, topic_id, f"پیام همگانی ({mtype}) به {sent} کاربر ارسال شد.")
-    await state.clear()
-
-@router.message(F.text == "👤 مدیریت کاربر")
-async def admin_user_management(message: Message):
-    if not is_authorized_admin(str(message.from_user.id)):
-        return
-    await message.answer("👤 مدیریت کاربر: آیدی کاربر را برای جستجو یا مدیریت ارسال کنید (در مرحله کامل لیست و اکشن‌ها).")
-
-# Agent Management (Stage 3)
-@router.message(F.text == "🤖 افزودن نماینده")
-async def add_agent_start(message: Message, state: FSMContext):
-    if not is_authorized_admin(str(message.from_user.id)):
-        return
-    await message.answer("آیدی عددی کاربر برای افزودن به عنوان نماینده را ارسال کنید:")
-    await state.set_state(AdminStates.add_agent)
-
-@router.message(AdminStates.add_agent)
-async def add_agent(message: Message, state: FSMContext):
-    agent_id = sanitize_text(message.text)
-    async with async_session() as session:
-        user = (await session.execute(select(User).where(User.id == agent_id))).scalar_one_or_none()
-        if user:
-            user.agent = "n"  # or n2
-            await session.commit()
-            await message.answer(f"✅ کاربر {agent_id} به عنوان نماینده عادی اضافه شد.")
-        else:
-            await message.answer("کاربر یافت نشد.")
-    await state.clear()
-
-# Discount Codes (Stage 3)
-@router.message(F.text == "🎁 مدیریت تخفیف")
-async def discount_management(message: Message, state: FSMContext):
-    if not is_authorized_admin(str(message.from_user.id)):
-        return
-    await message.answer("کد تخفیف جدید را ارسال کنید (یا لیست را ببینید):")
-    await state.set_state(AdminStates.discount_code)
-
-@router.message(AdminStates.discount_code)
-async def create_discount(message: Message, state: FSMContext):
-    code = sanitize_text(message.text)
-    async with async_session() as session:
-        # Add to Discount or DiscountSell table
-        disc = Discount(code=code, price="10", limituse="100", limitused="0")  # example
-        session.add(disc)
-        await session.commit()
-    await message.answer(f"✅ کد تخفیف {code} ثبت شد.")
-    await state.clear()
-
-# Manual Order / Gift (Stage 3)
-@router.message(F.text == "🔧 فروش دستی")
-async def manual_order_start(message: Message, state: FSMContext):
-    if not is_authorized_admin(str(message.from_user.id)):
-        return
-    await message.answer("آیدی کاربر + نام محصول + پنل را برای فروش دستی ارسال کنید:")
-    await state.set_state(AdminStates.manual_order)
-
-@router.message(AdminStates.manual_order)
-async def manual_order(message: Message, state: FSMContext):
-    # Parse and create invoice + service (simplified)
-    await message.answer("✅ سفارش دستی ثبت شد (در نسخه کامل با ساخت روی پنل).")
-    await state.clear()
-
-@router.message(F.text == "🎁 هدیه همگانی")
-async def mass_gift_start(message: Message, state: FSMContext):
-    if not is_authorized_admin(str(message.from_user.id)):
-        return
-    await message.answer("حجم یا زمان هدیه را مشخص کنید (مثال: volume 10 یا time 5):")
-    await state.set_state(AdminStates.gift_volume)
-
-@router.message(AdminStates.gift_volume)
-async def mass_gift(message: Message, state: FSMContext):
-    # Apply gift to all or group
-    await message.answer("✅ هدیه همگانی اعمال شد (در نسخه کامل با کرون و گزارش).")
-    await state.clear()
-
-# Basic Settings Toggles (Stage 3)
-@router.message(F.text == "⚙️ تنظیمات")
-async def settings_menu(message: Message, state: FSMContext):
-    if not is_authorized_admin(str(message.from_user.id)):
-        return
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="ربات روشن/خاموش", callback_data="toggle_bot")],
-        [InlineKeyboardButton(text="زیرمجموعه روشن/خاموش", callback_data="toggle_affiliates")],
-        [InlineKeyboardButton(text="احراز هویت", callback_data="toggle_verify")],
-    ])
-    await message.answer("⚙️ تنظیمات اصلی:", reply_markup=kb)
-    await state.set_state(AdminStates.settings_toggle)
-
-@router.callback_query(F.data.startswith("toggle_"), AdminStates.settings_toggle)
-async def toggle_setting(callback: CallbackQuery, state: FSMContext):
-    setting = callback.data.split("_")[1]
-    async with async_session() as session:
-        s = (await session.execute(select(Setting).limit(1))).scalar_one_or_none()
-        if s:
-            if setting == "bot":
-                s.Bot_Status = "botstatusoff" if s.Bot_Status == "botstatuson" else "botstatuson"
-            # Add more toggles
-            await session.commit()
-    await callback.message.answer(f"تنظیم {setting} تغییر کرد.")
-    await state.clear()
-
-# Report via topics for admin actions (enhanced in Stage 3)
-# All admin actions now log to appropriate topics.
-
-# ==================== STAGE 4: Remaining Features (Mini-app, Language, Keyboard, Score, Debt, Bulk, Optimize, Final Polish) ====================
-
-@router.message(F.text == "🌏 تغییر زبان")
-async def change_language(message: Message):
-    # Multi-language support (fa/en/ru/zh)
-    await message.answer("🌏 زبان به فارسی تنظیم شد (پشتیبانی کامل از زبان‌های دیگر در مرحله نهایی).")
-
-# Score system
-@router.message(F.text == "🥅 امتیاز من")
-async def my_score(message: Message):
-    user_id = str(message.from_user.id)
-    async with async_session() as session:
-        user = (await session.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
-        score = user.score if user else 0
-    await message.answer(f"🥅 امتیاز حساب شما: {score}")
-
-# Debt settlement
-@router.message(F.text == "💎 تسویه بدهی")
-async def debt_settlement(message: Message):
-    await message.answer("💎 برای تسویه بدهی مبلغ را وارد کنید (سیستم کامل در مرحله ۴).")
-
-# Bulk operations placeholder (integrated in admin)
-@router.message(F.text == "📦 عملیات انبوه")
-async def bulk_operations(message: Message):
-    if not is_authorized_admin(str(message.from_user.id)):
-        return
-    await message.answer("📦 عملیات انبوه (خرید عمده، هدیه گروهی) در پنل ادمین فعال است.")
-
-# Mini-app support hook
-@router.message(F.text == "📱 مینی اپ")
-async def mini_app(message: Message):
-    await message.answer("📱 لینک مینی‌اپ: https://yourdomain.com/miniapp (پشتیبانی کامل اضافه شد).")
-
-# Keyboard customization (admin)
-@router.message(F.text == "⌨️ سفارشی‌سازی کیبورد")
-async def custom_keyboard(message: Message):
-    if not is_authorized_admin(str(message.from_user.id)):
-        return
-    await message.answer("⌨️ کیبورد اصلی قابل سفارشی‌سازی از تنظیمات ادمین است.")
-
-# Optimize and backup (admin)
-@router.message(F.text == "🗑 بهینه‌سازی")
-async def optimize_bot(message: Message):
-    if not is_authorized_admin(str(message.from_user.id)):
-        return
-    await message.answer("🗑 بهینه‌سازی ربات انجام شد (پاکسازی لاگ‌ها و کش).")
-
-@router.message(F.text == "📦 بکاپ")
-async def backup_bot(message: Message):
-    if not is_authorized_admin(str(message.from_user.id)):
-        return
-    await message.answer("📦 بکاپ کامل ربات ایجاد شد.")
-
-# Final polish: error handling, security everywhere, ready for production.
-
-# ==================== MULTI-ADMIN SYSTEM WITH PERMISSIONS (New Professional Feature) ====================
-
-@router.message(Command("addadmin"))
-async def add_new_admin(message: Message, state: FSMContext):
-    if not is_authorized_admin(str(message.from_user.id)):
-        await message.answer("❌ فقط ادمین اصلی می‌تواند ادمین جدید اضافه کند.")
-        return
-    
-    args = message.text.split()
-    if len(args) < 2:
-        await message.answer("📌 فرمت: /addadmin [آیدی عددی] [سطح دسترسی: administrator|support|finance]")
-        return
-    
-    new_admin_id = sanitize_text(args[1])
-    role = sanitize_text(args[2]) if len(args) > 2 else "administrator"
-    
-    async with async_session() as session:
-        existing = (await session.execute(select(Admin).where(Admin.id_admin == new_admin_id))).scalar_one_or_none()
-        if existing:
-            await message.answer("⚠️ این کاربر قبلاً ادمین است.")
-            return
-        
-        new_admin = Admin(
-            id_admin=new_admin_id,
-            rule=role,
-            permissions=json.dumps({"all": role == "administrator", "users": True, "payments": role in ["administrator", "finance"], "reports": True}),
-            added_by=str(message.from_user.id),
-            added_at=str(int(datetime.now().timestamp()))
-        )
-        session.add(new_admin)
-        await session.commit()
-    
-    await message.answer(f"✅ ادمین جدید با آیدی {new_admin_id} و نقش {role} اضافه شد.\n\nادمین می‌تواند از /panel استفاده کند.")
-    # Notify new admin
+    await message.answer("✅ پیام شما ثبت شد. به‌زودی پاسخ داده می‌شود.", reply_markup=await menu_markup())
+    await report(message.bot,
+                 f"📨 تیکت جدید #{ticket.id} از {message.from_user.id}:\n{text}\n\n"
+                 f"پاسخ: /reply {ticket.id} <متن>", "support")
     try:
-        await message.bot.send_message(int(new_admin_id), "🎉 شما به عنوان ادمین ZendanBOT اضافه شدید! از /panel برای دسترسی به پنل استفاده کنید.")
-    except:
+        await message.bot.send_message(
+            settings.ADMIN_ID,
+            f"📨 تیکت جدید #{ticket.id} از کاربر {message.from_user.id}:\n\n{text}\n\n"
+            f"برای پاسخ: /reply {ticket.id} <متن>",
+        )
+    except Exception:  # noqa: BLE001
         pass
 
-@router.message(Command("removeadmin"))
-async def remove_admin(message: Message):
-    if not is_authorized_admin(str(message.from_user.id)):
-        await message.answer("❌ فقط ادمین اصلی می‌تواند ادمین حذف کند.")
-        return
-    
-    args = message.text.split()
-    if len(args) < 2:
-        await message.answer("📌 فرمت: /removeadmin [آیدی عددی]")
-        return
-    
-    admin_id = sanitize_text(args[1])
-    
-    async with async_session() as session:
-        admin = (await session.execute(select(Admin).where(Admin.id_admin == admin_id))).scalar_one_or_none()
-        if not admin:
-            await message.answer("⚠️ ادمین یافت نشد.")
-            return
-        if admin_id == str(settings.ADMIN_ID):
-            await message.answer("❌ نمی‌توانید ادمین اصلی را حذف کنید.")
-            return
-        await session.delete(admin)
-        await session.commit()
-    
-    await message.answer(f"✅ ادمین {admin_id} حذف شد.")
 
-@router.message(Command("listadmins"))
-async def list_admins(message: Message):
-    if not is_authorized_admin(str(message.from_user.id)):
-        return
-    
-    async with async_session() as session:
-        admins = (await session.execute(select(Admin))).scalars().all()
-    
-    text = "👥 <b>لیست ادمین‌ها:</b>\n\n"
-    for a in admins:
-        text += f"• {a.id_admin} | نقش: {a.rule} | اضافه شده توسط: {a.added_by}\n"
-    await message.answer(text, parse_mode="HTML")
-
-# Permission check helper (used in admin handlers)
-async def has_permission(user_id: str, perm: str) -> bool:
-    if is_authorized_admin(user_id):
-        return True
-    async with async_session() as session:
-        admin = (await session.execute(select(Admin).where(Admin.id_admin == user_id))).scalar_one_or_none()
-        if not admin:
-            return False
-        try:
-            perms = json.loads(admin.permissions or '{}')
-            return perms.get("all", False) or perms.get(perm, False)
-        except:
-            return False
-
-# ==================== MORE PROFESSIONAL CAPABILITIES (Added to reach full professional level) ====================
-
-# Smart Service Recommender (New capability - suggests best plan based on user history)
-@router.message(F.text == "🤖 پیشنهاد هوشمند")
-async def smart_recommender(message: Message):
-    user_id = str(message.from_user.id)
-    async with async_session() as session:
-        user_invoices = (await session.execute(select(Invoice).where(Invoice.id_user == user_id))).scalars().all()
-        if not user_invoices:
-            await message.answer("🤖 برای پیشنهاد هوشمند، حداقل یک سرویس بخرید.")
-            return
-        # Simple smart logic: based on average volume/time
-        avg_volume = sum(int(i.Volume or 0) for i in user_invoices) / len(user_invoices)
-        avg_time = sum(int(i.Service_time or 0) for i in user_invoices) / len(user_invoices)
-        suggestion = f"بر اساس تاریخچه شما، پیشنهاد می‌شود پلن {int(avg_volume)} گیگ برای {int(avg_time)} روز."
-    await message.answer(f"🤖 <b>پیشنهاد هوشمند ZendanBOT:</b>\n{suggestion}\n\nبرای خرید از منوی خرید اقدام کنید.")
-
-# Full Bulk Purchase for Agents (Professional capability)
-@router.message(F.text == "📦 خرید عمده")
-async def bulk_purchase(message: Message, state: FSMContext):
-    user_id = str(message.from_user.id)
-    if not await has_permission(user_id, "bulk"):
-        await message.answer("❌ دسترسی خرید عمده ندارید (فقط نمایندگان پیشرفته).")
-        return
-    await message.answer("📦 تعداد سرویس مورد نظر را وارد کنید (حداقل 5، حداکثر 50):")
-    await state.set_state(UserStates.bulk_buy)
-
-@router.message(UserStates.bulk_buy)
-async def process_bulk(message: Message, state: FSMContext):
-    count = int(sanitize_text(message.text) or 0)
-    if count < 5 or count > 50:
-        await message.answer("تعداد نامعتبر.")
-        await state.clear()
-        return
-    # In full flow: create multiple configs, apply discount, etc.
-    await message.answer(f"✅ {count} سرویس عمده با موفقیت ثبت شد (با تخفیف خودکار). در مرحله واقعی روی پنل ساخته می‌شوند.")
+@router.message(F.text == kb.BTN_HELP)
+async def menu_help(message: Message, state: FSMContext):
     await state.clear()
+    await message.answer("📚 " + await get_setting("help_text", ""))
 
-# Advanced Real-time Stats in Bot (Professional)
-@router.message(F.text == "📈 آمار لحظه‌ای")
-async def realtime_stats(message: Message):
-    if not await has_permission(str(message.from_user.id), "reports"):
-        await message.answer("❌ دسترسی ندارید.")
+
+@router.message(F.text == kb.BTN_RULES)
+async def menu_rules(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer("📜 " + await get_setting("rules_text", ""))
+
+
+@router.message(F.text == kb.BTN_LANG)
+async def menu_lang(message: Message, state: FSMContext):
+    await state.clear()
+    from app.i18n import t
+    from app.i18n import get_lang as _gl
+    lang = await _gl(message.from_user.id)
+    await message.answer(t("choose_lang", lang), reply_markup=kb.lang_inline())
+
+
+@router.callback_query(F.data.startswith("setlang:"))
+async def cb_set_lang(cb: CallbackQuery):
+    from app.i18n import set_lang, t
+    lang = cb.data.split(":")[1]
+    await set_lang(cb.from_user.id, lang)
+    await cb.message.answer(t("lang_set", lang), reply_markup=await menu_markup())
+    await cb.answer()
+
+
+# --------------------------------------------------------------------------- #
+#  Gift code
+# --------------------------------------------------------------------------- #
+@router.message(F.text == kb.BTN_GIFT)
+async def menu_gift(message: Message, state: FSMContext):
+    await state.clear()
+    if await get_setting("giftcode_enabled", "1") != "1":
+        await message.answer("بخش کد هدیه غیرفعال است.")
         return
+    await message.answer("🎟 کد هدیه خود را ارسال کنید:", reply_markup=kb.cancel_inline())
+    await state.set_state(UserSG.gift_code)
+
+
+@router.callback_query(F.data == "giftcode")
+async def cb_giftcode(cb: CallbackQuery, state: FSMContext):
+    await cb.message.answer("🎟 کد هدیه خود را ارسال کنید:", reply_markup=kb.cancel_inline())
+    await state.set_state(UserSG.gift_code)
+    await cb.answer()
+
+
+@router.message(UserSG.gift_code)
+async def gift_redeem(message: Message, state: FSMContext):
+    code = sanitize_text(message.text or "", 100).strip()
+    uid = message.from_user.id
     async with async_session() as session:
-        users = len((await session.execute(select(User))).scalars().all())
-        active = len((await session.execute(select(Invoice).where(Invoice.Status == "active"))).scalars().all())
-    await message.answer(f"📈 آمار لحظه‌ای:\nکاربران: {users}\nسرویس فعال: {active}\n(به‌روز)")
-
-# More panel methods and payment full flows already integrated.
-# Added language full support, more error handling, speed optimizations (async DB queries optimized).
-
-# ==================== FINAL POLISH & MORE COMPLETE FEATURES (Pure Bot - All Real) ====================
-
-# Full real service actions with panel calls (more complete)
-@router.callback_query(F.data.startswith("turnoff_"))
-async def turn_off_service(callback: CallbackQuery):
-    inv_id = callback.data.split("_")[1]
-    async with async_session() as session:
-        inv = (await session.execute(select(Invoice).where(Invoice.id_invoice == inv_id))).scalar_one_or_none()
-        if inv:
-            panel = (await session.execute(select(MarzbanPanel).where(MarzbanPanel.name_panel == inv.Service_location))).scalar_one_or_none()
-            if panel:
-                try:
-                    api = MarzbanAPI(panel.url_panel, panel.username_panel, panel.password_panel)
-                    await api.login()
-                    await api.update_user(inv.username, disable=True)
-                    await callback.message.answer("❌ سرویس با موفقیت خاموش شد.")
-                except:
-                    await callback.message.answer("❌ سرویس خاموش شد (شبیه‌سازی امن).")
-            else:
-                await callback.message.answer("❌ سرویس خاموش شد.")
-        else:
-            await callback.message.answer("سرویس یافت نشد.")
-
-@router.callback_query(F.data.startswith("turnon_"))
-async def turn_on_service(callback: CallbackQuery):
-    inv_id = callback.data.split("_")[1]
-    async with async_session() as session:
-        inv = (await session.execute(select(Invoice).where(Invoice.id_invoice == inv_id))).scalar_one_or_none()
-        if inv:
-            panel = (await session.execute(select(MarzbanPanel).where(MarzbanPanel.name_panel == inv.Service_location))).scalar_one_or_none()
-            if panel:
-                try:
-                    api = MarzbanAPI(panel.url_panel, panel.username_panel, panel.password_panel)
-                    await api.login()
-                    await api.update_user(inv.username, enable=True)
-                    await callback.message.answer("💡 سرویس با موفقیت روشن شد.")
-                except:
-                    await callback.message.answer("💡 سرویس روشن شد (شبیه‌سازی امن).")
-            else:
-                await callback.message.answer("💡 سرویس روشن شد.")
-        else:
-            await callback.message.answer("سرویس یافت نشد.")
-
-# More admin sub-menus for best Telegram admin panel
-@router.message(F.text == "📋 گزارشات")
-async def admin_reports(message: Message):
-    if not is_authorized_admin(str(message.from_user.id)):
-        return
+        gc = (await session.execute(
+            select(GiftCode).where(GiftCode.code == code, GiftCode.is_active == True)  # noqa: E712
+        )).scalar_one_or_none()
+        if not gc:
+            await message.answer("❌ کد نامعتبر است.")
+            return
+        if gc.max_uses and gc.used >= gc.max_uses:
+            await message.answer("❌ ظرفیت استفاده از این کد به پایان رسیده است.")
+            return
+        already = (await session.execute(
+            select(GiftCodeUsed).where(GiftCodeUsed.code_id == gc.id, GiftCodeUsed.user_id == uid)
+        )).scalar_one_or_none()
+        if already:
+            await message.answer("📌 شما قبلاً از این کد استفاده کرده‌اید.")
+            return
+        user = (await session.execute(select(User).where(User.id == uid))).scalar_one_or_none()
+        user.balance += gc.amount
+        gc.used += 1
+        session.add(GiftCodeUsed(code_id=gc.id, user_id=uid))
+        await session.commit()
+        new_bal = user.balance
+    await state.clear()
     await message.answer(
-        "📋 گزارشات:\n"
-        "- گزارش خرید\n"
-        "- گزارش پرداخت\n"
-        "- گزارش خطا\n"
-        "از طریق تاپیک‌های گروه ارسال می‌شوند."
+        f"✅ کد هدیه اعمال شد. {gc.amount:,} تومان به کیف پول شما اضافه شد.\n"
+        f"موجودی فعلی: {new_bal:,} تومان",
+        reply_markup=await menu_markup(),
     )
 
-# Best Telegram admin panel - comprehensive and beautiful
-# (Already expanded in previous stages with real DB updates, mass actions, etc.)
 
+# --------------------------------------------------------------------------- #
+#  Custom service
+# --------------------------------------------------------------------------- #
+@router.message(F.text == kb.BTN_CUSTOM)
+async def menu_custom(message: Message, state: FSMContext):
+    await state.clear()
+    if not await custom_enabled():
+        await message.answer("سرویس دلخواه غیرفعال است.")
+        return
+    if not await enforce_join(message):
+        return
+    mn = await get_setting("custom_min_gb", "1")
+    mx = await get_setting("custom_max_gb", "200")
+    await message.answer(
+        f"🧩 <b>سرویس دلخواه</b>\n\nحجم سرویس را به گیگابایت وارد کنید (بین {mn} و {mx}):",
+        reply_markup=kb.cancel_inline(),
+    )
+    await state.set_state(UserSG.custom_volume)
+
+
+@router.message(UserSG.custom_volume)
+async def custom_volume(message: Message, state: FSMContext):
+    raw = sanitize_text(message.text or "")
+    if not raw.isdigit():
+        await message.answer("لطفاً فقط عدد وارد کنید.")
+        return
+    vol = int(raw)
+    mn = int(await get_setting("custom_min_gb", "1") or 1)
+    mx = int(await get_setting("custom_max_gb", "200") or 200)
+    if not (mn <= vol <= mx):
+        await message.answer(f"حجم باید بین {mn} و {mx} گیگ باشد.")
+        return
+    await state.update_data(c_vol=vol)
+    dmn = await get_setting("custom_min_days", "1")
+    dmx = await get_setting("custom_max_days", "180")
+    await message.answer(f"⏳ مدت سرویس را به روز وارد کنید (بین {dmn} و {dmx}):",
+                         reply_markup=kb.cancel_inline())
+    await state.set_state(UserSG.custom_days)
+
+
+@router.message(UserSG.custom_days)
+async def custom_days(message: Message, state: FSMContext):
+    raw = sanitize_text(message.text or "")
+    if not raw.isdigit():
+        await message.answer("لطفاً فقط عدد وارد کنید.")
+        return
+    days = int(raw)
+    dmn = int(await get_setting("custom_min_days", "1") or 1)
+    dmx = int(await get_setting("custom_max_days", "180") or 180)
+    if not (dmn <= days <= dmx):
+        await message.answer(f"مدت باید بین {dmn} و {dmx} روز باشد.")
+        return
+    data = await state.get_data()
+    vol = data.get("c_vol", 0)
+    ppg = int(await get_setting("custom_price_per_gb", "1000") or 0)
+    ppd = int(await get_setting("custom_price_per_day", "1000") or 0)
+    price = vol * ppg + days * ppd
+    await state.update_data(c_days=days, c_price=price)
+
+    fixed = int(await get_setting("custom_panel_id", "0") or 0)
+    if fixed:
+        await _confirm_custom(message, fixed)
+        return
+    async with async_session() as session:
+        panels = (await session.execute(
+            select(Panel).where(Panel.is_active == True)  # noqa: E712
+        )).scalars().all()
+    if not panels:
+        await message.answer("هیچ سروری موجود نیست.")
+        await state.clear()
+        return
+    await message.answer(
+        f"💰 قیمت محاسبه‌شده: <b>{price:,}</b> تومان\n\n🌐 موقعیت سرور را انتخاب کنید:",
+        reply_markup=kb.panels_inline(panels, "cloc"),
+    )
+
+
+@router.callback_query(F.data.startswith("cloc:"))
+async def cb_custom_loc(cb: CallbackQuery, state: FSMContext):
+    panel_id = int(cb.data.split(":")[1])
+    await _confirm_custom(cb.message, panel_id, state_obj=state)
+    await cb.answer()
+
+
+async def _confirm_custom(message: Message, panel_id: int, state_obj: FSMContext | None = None):
+    # message here may be a bot message (callback) — fetch state via context isn't
+    # available, so we pass values through FSM data already stored.
+    await message.answer(
+        "برای نهایی‌سازی روی «پرداخت و دریافت» بزنید.",
+        reply_markup=kb.confirm_custom_inline(panel_id),
+    )
+
+
+@router.callback_query(F.data.startswith("cpay:"))
+async def cb_custom_pay(cb: CallbackQuery, state: FSMContext):
+    panel_id = int(cb.data.split(":")[1])
+    data = await state.get_data()
+    vol = data.get("c_vol")
+    days = data.get("c_days")
+    price = data.get("c_price")
+    if not (vol and days and price is not None):
+        await cb.answer("اطلاعات سرویس منقضی شده. دوباره شروع کنید.", show_alert=True)
+        await state.clear()
+        return
+    uid = cb.from_user.id
+    async with async_session() as session:
+        panel = (await session.execute(select(Panel).where(Panel.id == panel_id))).scalar_one_or_none()
+        user = (await session.execute(select(User).where(User.id == uid))).scalar_one_or_none()
+    if not panel or not user:
+        await cb.answer("اطلاعات نامعتبر.", show_alert=True)
+        return
+    if user.balance < price:
+        await cb.answer(f"موجودی کافی نیست. کمبود: {price - user.balance:,} تومان", show_alert=True)
+        return
+    await cb.message.edit_text("⏳ در حال ساخت سرویس...")
+    product = Product(name=f"دلخواه {vol}گیگ-{days}روز", volume_gb=vol, days=days, price=price)
+    ok, msg, service = await provision_service(uid, product, panel)
+    if not ok:
+        await cb.message.answer(msg, reply_markup=await menu_markup())
+        await cb.answer()
+        return
+    async with async_session() as session:
+        u = (await session.execute(select(User).where(User.id == uid))).scalar_one()
+        u.balance -= price
+        await session.commit()
+    await state.clear()
+    await send_config(
+        cb.message,
+        f"✅ <b>سرویس دلخواه ساخته شد</b>\n\n🔗 لینک اتصال:\n<code>{service.sub_url}</code>",
+        service.sub_url, service.remark,
+    )
+    await cb.answer("انجام شد ✅")
+    await report(cb.bot, f"🧩 سرویس دلخواه: کاربر {uid} - {price:,} تومان", "buy")
+
+
+# --------------------------------------------------------------------------- #
+#  Buy flow
+# --------------------------------------------------------------------------- #
+@router.callback_query(F.data == "home")
+async def cb_home(cb: CallbackQuery, state: FSMContext):
+    await state.clear()
+    try:
+        await cb.message.delete()
+    except Exception:  # noqa: BLE001
+        pass
+    await cb.message.answer("🏠 منوی اصلی", reply_markup=await menu_markup())
+    await cb.answer()
+
+
+@router.callback_query(F.data == "back_products")
+async def cb_back_products(cb: CallbackQuery):
+    async with async_session() as session:
+        products = (await session.execute(
+            select(Product).where(Product.is_active == True)  # noqa: E712
+        )).scalars().all()
+    await cb.message.edit_text("🛍 یکی از پلن‌ها را انتخاب کنید:",
+                               reply_markup=kb.products_inline(products))
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("buy:"))
+async def cb_buy(cb: CallbackQuery, state: FSMContext):
+    # starting a fresh purchase: drop any stale discount from a previous one
+    await state.update_data(d_code=None, d_final=None, d_percent=None, d_product=None)
+    product_id = int(cb.data.split(":")[1])
+    async with async_session() as session:
+        product = (await session.execute(
+            select(Product).where(Product.id == product_id)
+        )).scalar_one_or_none()
+        if not product:
+            await cb.answer("محصول یافت نشد.", show_alert=True)
+            return
+        if product.panel_id:
+            await _confirm_buy(cb, product, product.panel_id)
+            return
+        panels = (await session.execute(
+            select(Panel).where(Panel.is_active == True)  # noqa: E712
+        )).scalars().all()
+    if not panels:
+        await cb.answer("هیچ سروری موجود نیست.", show_alert=True)
+        return
+    await cb.message.edit_text("🌐 موقعیت سرور را انتخاب کنید:",
+                               reply_markup=kb.panels_inline(panels, f"loc:{product_id}"))
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("loc:"))
+async def cb_location(cb: CallbackQuery):
+    _, product_id, panel_id = cb.data.split(":")
+    async with async_session() as session:
+        product = (await session.execute(
+            select(Product).where(Product.id == int(product_id))
+        )).scalar_one_or_none()
+    if not product:
+        await cb.answer("محصول یافت نشد.", show_alert=True)
+        return
+    await _confirm_buy(cb, product, int(panel_id))
+
+
+async def _confirm_buy(cb: CallbackQuery, product: Product, panel_id: int):
+    async with async_session() as session:
+        panel = (await session.execute(select(Panel).where(Panel.id == panel_id))).scalar_one_or_none()
+        user = (await session.execute(select(User).where(User.id == cb.from_user.id))).scalar_one_or_none()
+    bal = user.balance if user else 0
+    vol = "نامحدود" if not product.volume_gb else f"{product.volume_gb} گیگ"
+    has_disc = await get_setting("discount_enabled", "1") == "1"
+    await cb.message.edit_text(
+        f"🧾 <b>پیش‌فاکتور</b>\n\n"
+        f"پلن: {product.name}\n"
+        f"موقعیت: {panel.name if panel else '-'}\n"
+        f"حجم: {vol}\n"
+        f"مدت: {product.days} روز\n"
+        f"قیمت: <b>{product.price:,}</b> تومان\n\n"
+        f"موجودی کیف پول شما: <b>{bal:,}</b> تومان",
+        reply_markup=kb.confirm_buy_inline(product.id, panel_id, has_disc),
+    )
+    await cb.answer()
+
+
+# ---- discount during purchase ----
+@router.callback_query(F.data.startswith("disc:"))
+async def cb_discount(cb: CallbackQuery, state: FSMContext):
+    _, product_id, panel_id = cb.data.split(":")
+    await state.update_data(d_product=int(product_id), d_panel=int(panel_id))
+    await cb.message.answer("🎁 کد تخفیف خود را ارسال کنید:", reply_markup=kb.cancel_inline())
+    await state.set_state(UserSG.discount_code)
+    await cb.answer()
+
+
+@router.message(UserSG.discount_code)
+async def discount_apply(message: Message, state: FSMContext):
+    code = sanitize_text(message.text or "", 100).strip()
+    data = await state.get_data()
+    pid, panel_id = data.get("d_product"), data.get("d_panel")
+    uid = message.from_user.id
+    async with async_session() as session:
+        d = (await session.execute(
+            select(Discount).where(Discount.code == code, Discount.is_active == True)  # noqa: E712
+        )).scalar_one_or_none()
+        product = (await session.execute(select(Product).where(Product.id == pid))).scalar_one_or_none()
+        if not d or not product:
+            await message.answer("❌ کد تخفیف نامعتبر است.")
+            return
+        if d.max_uses and d.used >= d.max_uses:
+            await message.answer("❌ ظرفیت این کد تخفیف به پایان رسیده است.")
+            return
+        if d.first_purchase_only:
+            cnt = (await session.execute(
+                select(Service).where(Service.user_id == uid)
+            )).scalars().first()
+            if cnt:
+                await message.answer("❌ این کد فقط برای اولین خرید است.")
+                return
+    final = int(product.price * (100 - d.percent) / 100)
+    await state.update_data(d_code=code, d_percent=d.percent, d_final=final)
+    await state.set_state(None)
+    await message.answer(
+        f"✅ کد تخفیف {d.percent}٪ اعمال شد.\n"
+        f"قیمت نهایی: <b>{final:,}</b> تومان\n\nبرای پرداخت روی دکمه زیر بزنید.",
+        reply_markup=kb.confirm_buy_inline(pid, panel_id, has_discount=False),
+    )
+
+
+@router.callback_query(F.data.startswith("pay:"))
+async def cb_pay(cb: CallbackQuery, state: FSMContext):
+    _, product_id, panel_id = cb.data.split(":")
+    uid = cb.from_user.id
+    data = await state.get_data()
+    disc_code = data.get("d_code")
+    disc_final = data.get("d_final")
+    disc_percent = data.get("d_percent")
+
+    async with async_session() as session:
+        product = (await session.execute(select(Product).where(Product.id == int(product_id)))).scalar_one_or_none()
+        panel = (await session.execute(select(Panel).where(Panel.id == int(panel_id)))).scalar_one_or_none()
+        user = (await session.execute(select(User).where(User.id == uid))).scalar_one_or_none()
+        if not product or not panel or not user:
+            await cb.answer("اطلاعات نامعتبر است.", show_alert=True)
+            return
+        price = product.price
+        if disc_code and data.get("d_product") == int(product_id) and disc_final is not None:
+            price = disc_final
+        # agents get their personal discount on top
+        if user.is_agent and user.agent_discount:
+            price = int(price * (100 - user.agent_discount) / 100)
+        if user.balance < price:
+            await cb.answer(
+                f"موجودی کافی نیست. ابتدا کیف پول را شارژ کنید.\nکمبود: {price - user.balance:,} تومان",
+                show_alert=True,
+            )
+            return
+
+    await cb.message.edit_text("⏳ در حال ساخت سرویس روی سرور...")
+    # apply effective price to the service record
+    buy_product = Product(name=product.name, volume_gb=product.volume_gb,
+                          days=product.days, price=price, panel_id=product.panel_id)
+    ok, msg, service = await provision_service(uid, buy_product, panel)
+    if not ok:
+        await cb.message.answer(msg, reply_markup=await menu_markup())
+        await cb.answer()
+        return
+
+    async with async_session() as session:
+        user = (await session.execute(select(User).where(User.id == uid))).scalar_one()
+        user.balance -= price
+        if disc_code and disc_final is not None:
+            d = (await session.execute(select(Discount).where(Discount.code == disc_code))).scalar_one_or_none()
+            if d:
+                d.used += 1
+        await session.commit()
+    await state.clear()
+    extra = f"\n(تخفیف {disc_percent}٪ اعمال شد)" if disc_code else ""
+    await send_config(
+        cb.message,
+        f"✅ <b>خرید موفق</b>{extra}\n\n"
+        f"پلن: {product.name}\n"
+        f"🔗 لینک اتصال:\n<code>{service.sub_url}</code>\n\n"
+        f"می‌توانید از «📦 سرویس‌های من» سرویس را مدیریت کنید.",
+        service.sub_url, service.remark,
+    )
+    await cb.answer("انجام شد ✅")
+    await report(cb.bot, f"🛍 خرید جدید: کاربر {uid} - {product.name} - {price:,} تومان", "buy")
+
+
+# --------------------------------------------------------------------------- #
+#  My services
+# --------------------------------------------------------------------------- #
+@router.callback_query(F.data == "my_services")
+async def cb_my_services(cb: CallbackQuery):
+    async with async_session() as session:
+        services = (await session.execute(
+            select(Service).where(Service.user_id == cb.from_user.id).order_by(Service.id.desc())
+        )).scalars().all()
+    if not services:
+        await cb.message.edit_text("شما هنوز سرویسی ندارید.")
+        await cb.answer()
+        return
+    await cb.message.edit_text("📦 سرویس‌های شما:", reply_markup=kb.services_inline(services))
+    await cb.answer()
+
+
+async def _get_user_service(service_id: int, user_id: int) -> Service | None:
+    async with async_session() as session:
+        svc = (await session.execute(select(Service).where(Service.id == service_id))).scalar_one_or_none()
+    if svc and svc.user_id == user_id:
+        return svc
+    return None
+
+
+@router.callback_query(F.data.startswith("svc:"))
+async def cb_service(cb: CallbackQuery):
+    svc = await _get_user_service(int(cb.data.split(":")[1]), cb.from_user.id)
+    if not svc:
+        await cb.answer("سرویس یافت نشد.", show_alert=True)
+        return
+    vol = "نامحدود" if not svc.volume_gb else f"{svc.volume_gb} گیگ"
+    exp = svc.expire_at.strftime("%Y-%m-%d") if svc.expire_at else "-"
+    await cb.message.edit_text(
+        f"📦 <b>{svc.product_name}</b>\n\n"
+        f"نام کاربری: <code>{svc.remark}</code>\n"
+        f"حجم: {vol} | مدت: {svc.days} روز\n"
+        f"انقضا: {exp}\n"
+        f"تمدید شده: {svc.renew_count or 0} بار\n"
+        f"وضعیت: {'فعال 🟢' if svc.status == 'active' else 'غیرفعال 🔴'}",
+        reply_markup=kb.service_actions_inline(svc),
+    )
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("svc_link:"))
+async def cb_service_link(cb: CallbackQuery):
+    svc = await _get_user_service(int(cb.data.split(":")[1]), cb.from_user.id)
+    if not svc:
+        await cb.answer("سرویس یافت نشد.", show_alert=True)
+        return
+    await cb.answer("در حال ساخت QR...")
+    caption = (
+        f"🔗 <b>{svc.product_name}</b>\n\n"
+        f"لینک اتصال:\n<code>{svc.sub_url}</code>\n\n"
+        f"📱 برای اتصال، QR بالا را در اپ خود اسکن کنید."
+    )
+    sub = svc.sub_url or ""
+    if sub:
+        try:
+            from aiogram.types import BufferedInputFile
+            from app.qr import make_config_qr
+            png = make_config_qr(sub, title="ZendanBot", subtitle=svc.remark)
+            await cb.message.answer_photo(
+                BufferedInputFile(png, filename="config.png"), caption=caption
+            )
+            return
+        except Exception:  # noqa: BLE001
+            pass
+    await cb.message.answer(caption)
+
+
+@router.callback_query(F.data.startswith("svc_changelink:"))
+async def cb_service_changelink(cb: CallbackQuery):
+    svc = await _get_user_service(int(cb.data.split(":")[1]), cb.from_user.id)
+    if not svc:
+        await cb.answer("سرویس یافت نشد.", show_alert=True)
+        return
+    await cb.answer("در حال تغییر لینک...")
+    ok, new_url = await change_service_link(svc)
+    if not ok:
+        await cb.message.answer("تغییر لینک ناموفق بود.")
+        return
+    await cb.message.answer(f"✅ لینک جدید:\n<code>{new_url}</code>")
+
+
+@router.callback_query(F.data.startswith("svc_transfer:"))
+async def cb_service_transfer(cb: CallbackQuery, state: FSMContext):
+    sid = int(cb.data.split(":")[1])
+    svc = await _get_user_service(sid, cb.from_user.id)
+    if not svc:
+        await cb.answer("سرویس یافت نشد.", show_alert=True)
+        return
+    await state.update_data(transfer_sid=sid)
+    await cb.message.answer(
+        "🎁 آیدی عددی کاربری که می‌خواهید سرویس را به او منتقل کنید بفرستید.\n"
+        "(کاربر باید حداقل یک‌بار /start ربات را زده باشد)",
+        reply_markup=kb.cancel_inline(),
+    )
+    await state.set_state(UserSG.transfer_target)
+    await cb.answer()
+
+
+@router.message(UserSG.transfer_target)
+async def transfer_submit(message: Message, state: FSMContext):
+    raw = sanitize_text(message.text or "")
+    if not raw.isdigit():
+        await message.answer("آیدی عددی نامعتبر است.")
+        return
+    target = int(raw)
+    data = await state.get_data()
+    sid = data.get("transfer_sid")
+    uid = message.from_user.id
+    if target == uid:
+        await message.answer("نمی‌توانید سرویس را به خودتان منتقل کنید.")
+        return
+    async with async_session() as session:
+        svc = (await session.execute(select(Service).where(Service.id == sid))).scalar_one_or_none()
+        if not svc or svc.user_id != uid:
+            await message.answer("سرویس یافت نشد.")
+            await state.clear()
+            return
+        target_user = (await session.execute(select(User).where(User.id == target))).scalar_one_or_none()
+        if not target_user:
+            await message.answer("کاربر مقصد یافت نشد. باید ابتدا ربات را /start کند.")
+            return
+        svc.user_id = target
+        await session.commit()
+    await state.clear()
+    await message.answer("✅ سرویس با موفقیت منتقل شد.", reply_markup=await menu_markup())
+    try:
+        await message.bot.send_message(
+            target, f"🎁 یک سرویس از طرف کاربر {uid} به شما منتقل شد. آن را در «📦 سرویس‌های من» ببینید."
+        )
+    except Exception:  # noqa: BLE001
+        pass
+    await report(message.bot, f"🎁 انتقال سرویس #{sid}: از {uid} به {target}", "buy")
+
+
+@router.callback_query(F.data.startswith("svc_usage:"))
+async def cb_service_usage(cb: CallbackQuery):
+    svc = await _get_user_service(int(cb.data.split(":")[1]), cb.from_user.id)
+    if not svc:
+        await cb.answer("سرویس یافت نشد.", show_alert=True)
+        return
+    await cb.answer("در حال دریافت مصرف...")
+    data = await fetch_usage(svc)
+    if not data:
+        await cb.message.answer("امکان دریافت مصرف فعلاً وجود ندارد.")
+        return
+    up = data.get("up", 0); down = data.get("down", 0); total = data.get("total", 0)
+    used_gb = (up + down) / (1024 ** 3)
+    total_txt = f"{total / (1024 ** 3):.1f} گیگ" if total else "نامحدود"
+    await cb.message.answer(
+        f"📊 مصرف سرویس <b>{svc.product_name}</b>:\n\n"
+        f"مصرف‌شده: {used_gb:.2f} گیگ\nکل: {total_txt}"
+    )
+
+
+@router.callback_query(F.data.startswith("svc_renew:"))
+async def cb_service_renew(cb: CallbackQuery):
+    sid = int(cb.data.split(":")[1])
+    svc = await _get_user_service(sid, cb.from_user.id)
+    if not svc:
+        await cb.answer("سرویس یافت نشد.", show_alert=True)
+        return
+    async with async_session() as session:
+        products = (await session.execute(
+            select(Product).where(Product.is_active == True)  # noqa: E712
+        )).scalars().all()
+    if not products:
+        await cb.answer("پلنی برای تمدید موجود نیست.", show_alert=True)
+        return
+    await cb.message.edit_text("♻️ پلن تمدید را انتخاب کنید:",
+                               reply_markup=kb.renew_products_inline(sid, products))
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("dorenew:"))
+async def cb_do_renew(cb: CallbackQuery):
+    _, sid, pid = cb.data.split(":")
+    uid = cb.from_user.id
+    svc = await _get_user_service(int(sid), uid)
+    if not svc:
+        await cb.answer("سرویس یافت نشد.", show_alert=True)
+        return
+    async with async_session() as session:
+        product = (await session.execute(select(Product).where(Product.id == int(pid)))).scalar_one_or_none()
+        user = (await session.execute(select(User).where(User.id == uid))).scalar_one_or_none()
+    if not product:
+        await cb.answer("پلن یافت نشد.", show_alert=True)
+        return
+    if user.balance < product.price:
+        await cb.answer(f"موجودی کافی نیست. کمبود: {product.price - user.balance:,} تومان", show_alert=True)
+        return
+    await cb.message.edit_text("⏳ در حال تمدید سرویس...")
+    ok, msg = await renew_service(svc, product.volume_gb, product.days)
+    if not ok:
+        await cb.message.answer(msg, reply_markup=await menu_markup())
+        await cb.answer()
+        return
+    async with async_session() as session:
+        u = (await session.execute(select(User).where(User.id == uid))).scalar_one()
+        u.balance -= product.price
+        await session.commit()
+    await cb.message.answer(
+        f"✅ سرویس با موفقیت تمدید شد.\n+{product.volume_gb or 'نامحدود'} گیگ | +{product.days} روز",
+        reply_markup=await menu_markup(),
+    )
+    await cb.answer("تمدید شد ✅")
+    await report(cb.bot, f"♻️ تمدید: کاربر {uid} - {product.name} - {product.price:,} تومان", "buy")
+
+
+@router.callback_query(F.data.startswith("svc_off:") | F.data.startswith("svc_on:"))
+async def cb_service_toggle(cb: CallbackQuery):
+    action, sid = cb.data.split(":")
+    enable = action == "svc_on"
+    svc = await _get_user_service(int(sid), cb.from_user.id)
+    if not svc:
+        await cb.answer("سرویس یافت نشد.", show_alert=True)
+        return
+    await cb.answer("در حال اعمال...")
+    ok = await toggle_service(svc, enable)
+    if not ok:
+        await cb.message.answer("اعمال تغییر روی پنل ناموفق بود.")
+        return
+    async with async_session() as session:
+        s = (await session.execute(select(Service).where(Service.id == svc.id))).scalar_one()
+        s.status = "active" if enable else "disabled"
+        await session.commit()
+        await session.refresh(s)
+    await cb.message.edit_reply_markup(reply_markup=kb.service_actions_inline(s))
+    await cb.message.answer("✅ انجام شد." if enable else "✅ سرویس خاموش شد.")
+
+
+# --------------------------------------------------------------------------- #
+#  Wallet charge (card-to-card + receipt)
+# --------------------------------------------------------------------------- #
+@router.callback_query(F.data == "charge")
+async def cb_charge(cb: CallbackQuery, state: FSMContext):
+    mn = int(await get_setting("min_charge", "10000") or 10000)
+    mx = int(await get_setting("max_charge", "5000000") or 5000000)
+    await cb.message.answer(
+        f"💳 مبلغ شارژ را به تومان وارد کنید (بین {mn:,} و {mx:,}):",
+        reply_markup=kb.cancel_inline(),
+    )
+    await state.set_state(UserSG.charging)
+    await cb.answer()
+
+
+@router.message(UserSG.charging)
+async def charge_amount(message: Message, state: FSMContext):
+    raw = sanitize_text(message.text or "").replace(",", "").replace("،", "")
+    if not raw.isdigit():
+        await message.answer("لطفاً فقط عدد وارد کنید.")
+        return
+    amount = int(raw)
+    mn = int(await get_setting("min_charge", "10000") or 10000)
+    mx = int(await get_setting("max_charge", "5000000") or 5000000)
+    if not (mn <= amount <= mx):
+        await message.answer(f"مبلغ باید بین {mn:,} و {mx:,} تومان باشد.")
+        return
+    await state.update_data(amount=amount)
+    from app.gateways import enabled_gateways
+    gws = await enabled_gateways()
+    await state.set_state(None)
+    await message.answer(
+        f"مبلغ شارژ: <b>{amount:,}</b> تومان\n\n💵 روش پرداخت را انتخاب کنید:",
+        reply_markup=kb.pay_methods_inline(amount, gws),
+    )
+
+
+async def _start_card_charge(message: Message, amount: int, state: FSMContext):
+    await state.update_data(amount=amount)
+    card = await get_setting("card_number", "")
+    holder = await get_setting("card_holder", "")
+    await message.answer(
+        f"💳 لطفاً مبلغ <b>{amount:,}</b> تومان را به کارت زیر واریز کنید:\n\n"
+        f"شماره کارت:\n<code>{card}</code>\nبه نام: {holder}\n\n"
+        f"سپس <b>عکس رسید</b> را همینجا ارسال کنید.",
+        reply_markup=kb.cancel_inline(),
+    )
+    await state.set_state(UserSG.charge_receipt)
+
+
+@router.callback_query(F.data.startswith("pm:"))
+async def cb_pay_method(cb: CallbackQuery, state: FSMContext):
+    _, method, amount_s = cb.data.split(":")
+    amount = int(amount_s)
+    uid = cb.from_user.id
+    if method == "card":
+        await _start_card_charge(cb.message, amount, state)
+        await cb.answer()
+        return
+
+    # online gateway
+    from app import gateways
+    from app.models import Payment
+    await cb.message.edit_text("⏳ در حال ساخت لینک پرداخت...")
+    ok, ident, pay_url = False, "", ""
+    if method == "zarinpal":
+        ok, ident, pay_url = await gateways.zarinpal_create(amount, "شارژ کیف پول")
+    elif method == "aqayepardakht":
+        ok, ident, pay_url = await gateways.aqaye_create(amount)
+    elif method == "nowpayments":
+        order = f"u{uid}-{amount}"
+        ok, ident, pay_url = await gateways.nowpayments_create(amount, order)
+
+    if not ok:
+        await cb.message.answer(
+            "❌ ساخت لینک پرداخت ناموفق بود. لطفاً روش دیگری را امتحان کنید یا با پشتیبانی تماس بگیرید.",
+            reply_markup=await menu_markup(),
+        )
+        await cb.answer()
+        return
+
+    async with async_session() as session:
+        pay = Payment(user_id=uid, gateway=method, amount=amount, authority=ident)
+        session.add(pay)
+        await session.commit()
+        await session.refresh(pay)
+
+    await cb.message.answer(
+        f"💳 مبلغ <b>{amount:,}</b> تومان\n\n"
+        "روی «پرداخت» بزنید، پس از پرداخت دکمه «پرداخت کردم / بررسی» را بزنید.",
+        reply_markup=kb.gateway_pay_inline(pay_url, pay.id, method),
+    )
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("vpay:"))
+async def cb_verify_payment(cb: CallbackQuery, state: FSMContext):
+    from app import gateways
+    from app.models import Payment
+    from datetime import datetime as _dt
+    _, method, pid = cb.data.split(":")
+    async with async_session() as session:
+        pay = (await session.execute(select(Payment).where(Payment.id == int(pid)))).scalar_one_or_none()
+    if not pay or pay.user_id != cb.from_user.id:
+        await cb.answer("پرداخت یافت نشد.", show_alert=True)
+        return
+    if pay.status == "paid":
+        await cb.answer("این پرداخت قبلاً تایید شده است.", show_alert=True)
+        return
+
+    await cb.answer("در حال بررسی...")
+    paid, ref = False, ""
+    if method == "zarinpal":
+        paid, ref = await gateways.zarinpal_verify(pay.authority, pay.amount)
+    elif method == "aqayepardakht":
+        paid, ref = await gateways.aqaye_verify(pay.authority, pay.amount)
+    elif method == "nowpayments":
+        status = await gateways.nowpayments_status(pay.authority)
+        paid = status in ("finished", "confirmed")
+        ref = status or ""
+
+    if not paid:
+        await cb.message.answer("هنوز پرداخت تایید نشده است. اگر پرداخت کرده‌اید کمی صبر و دوباره بررسی کنید.")
+        return
+
+    async with async_session() as session:
+        p = (await session.execute(select(Payment).where(Payment.id == pay.id))).scalar_one()
+        if p.status == "paid":
+            await cb.message.answer("این پرداخت قبلاً اعمال شده است.")
+            return
+        p.status = "paid"
+        p.ref_id = str(ref)
+        p.paid_at = _dt.utcnow()
+        user = (await session.execute(select(User).where(User.id == pay.user_id))).scalar_one()
+        user.balance += pay.amount
+        await session.commit()
+        new_bal = user.balance
+    await cb.message.answer(
+        f"✅ پرداخت تایید شد. {pay.amount:,} تومان به کیف پول شما اضافه شد.\n"
+        f"موجودی فعلی: {new_bal:,} تومان",
+        reply_markup=await menu_markup(),
+    )
+    await report(cb.bot, f"💵 پرداخت آنلاین: کاربر {pay.user_id} - {pay.amount:,} تومان ({method})",
+                 "payment")
+
+
+@router.message(UserSG.charge_receipt, F.photo)
+async def charge_receipt(message: Message, state: FSMContext):
+    data = await state.get_data()
+    amount = data.get("amount", 0)
+    file_id = message.photo[-1].file_id
+    async with async_session() as session:
+        receipt = Receipt(user_id=message.from_user.id, amount=amount, photo_file_id=file_id)
+        session.add(receipt)
+        await session.commit()
+        await session.refresh(receipt)
+    await state.clear()
+    await message.answer("✅ رسید شما دریافت شد و در انتظار تایید ادمین است.",
+                         reply_markup=await menu_markup())
+    try:
+        await message.bot.send_photo(
+            settings.ADMIN_ID, photo=file_id,
+            caption=(f"💳 رسید جدید #{receipt.id}\n"
+                     f"کاربر: {message.from_user.id} (@{message.from_user.username})\n"
+                     f"مبلغ: {amount:,} تومان"),
+            reply_markup=kb.receipt_admin_inline(receipt.id),
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
+@router.message(UserSG.charge_receipt)
+async def charge_receipt_wrong(message: Message):
+    await message.answer("لطفاً عکس رسید را ارسال کنید (یا انصراف بزنید).")
+
+
+# --------------------------------------------------------------------------- #
+#  cancel
+# --------------------------------------------------------------------------- #
+@router.callback_query(F.data == "cancel")
+async def cb_cancel(cb: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await cb.message.answer("لغو شد.", reply_markup=await menu_markup())
+    await cb.answer()

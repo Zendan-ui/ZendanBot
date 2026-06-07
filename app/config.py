@@ -1,35 +1,23 @@
-from pydantic_settings import BaseSettings
 from pydantic import Field
-import os
+from pydantic_settings import BaseSettings
+
 
 class Settings(BaseSettings):
-    BOT_TOKEN: str = Field("test_token", env="BOT_TOKEN")
-    ADMIN_ID: int = Field(123456789, env="ADMIN_ID")
-    BOT_USERNAME: str = Field("testbot", env="BOT_USERNAME")
-    DOMAIN: str = Field("localhost", env="DOMAIN")
-    WEBHOOK_URL: str = Field("", env="WEBHOOK_URL")
-    DATABASE_URL: str = Field("sqlite+aiosqlite:///./zendanbot.db", env="DATABASE_URL")
-    DEBUG: bool = Field(True, env="DEBUG")
-    SECRET_KEY: str = Field("change-this-in-production", env="SECRET_KEY")
-    
-    # Request timeout for panels
-    REQUEST_EXEC_TIMEOUT: int | None = None
+    BOT_TOKEN: str = Field("test_token", alias="BOT_TOKEN")
+    ADMIN_ID: int = Field(123456789, alias="ADMIN_ID")
+    BOT_USERNAME: str = Field("testbot", alias="BOT_USERNAME")
+    DATABASE_URL: str = Field("sqlite+aiosqlite:///./zendanbot.db", alias="DATABASE_URL")
+    DEBUG: bool = Field(True, alias="DEBUG")
 
-    # ZendanBOT Branding - Pure Professional
-    BOT_NAME: str = "ZendanBOT"
-    BOT_FULL_NAME: str = "ZendanBOT"
-    VERSION: str = "2.0.0 - Professional Secure Edition"
-    PROJECT_DESCRIPTION: str = "Advanced Professional VPN Sales & Management Platform"
+    # Branding
+    BOT_FULL_NAME: str = "ZendanBot"
+    VERSION: str = "3.0.0"
 
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
+        populate_by_name = True
         extra = "ignore"
 
-settings = Settings()
 
-# For compatibility with original PHP config
-APIKEY = settings.BOT_TOKEN
-adminnumber = str(settings.ADMIN_ID)
-domainhosts = settings.DOMAIN
-usernamebot = settings.BOT_USERNAME
+settings = Settings()

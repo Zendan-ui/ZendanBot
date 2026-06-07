@@ -1,1 +1,0 @@
-# ZendanBOT Payment Gateways Package
